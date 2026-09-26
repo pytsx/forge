@@ -6,9 +6,9 @@ const labels = {front:'Frente',back:'Costas',left:'Esquerda',right:'Direita'};
 const names = {head:'Cabeça',torso:'Torso',pelvis:'Pelve',arm:'Braço',leg:'Perna',footwear:'Calçado',hand:'Mão',foot:'Pé',upper_arm:'Braço superior',forearm:'Antebraço',thigh:'Coxa',shin:'Canela',hair:'Cabelo',face:'Rosto',top:'Roupa superior',bottom:'Roupa inferior',accessory:'Acessório'};
 const sides = {left:'esquerdo',right:'direito',center:'central',unknown:'indefinido',bilateral:'bilateral'};
 const states = {queued:'Na fila',running:'Em execução',succeeded:'Concluído',failed:'Falhou',waiting_for_review:'Aguardando revisão',approved:'Aprovado',needs_review:'Revisar',corrected:'Corrigido',rejected:'Rejeitado',unreviewed:'Sem revisão'};
-const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S08:'DollGraph',S09:'Perception Graph',S09V:'Volumetria multi-view',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
+const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S07C:'Calibração física das vistas',S08:'DollGraph',S09:'Perception Graph',S09V:'Volumetria calibrada + SDF',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
 const colors = ['#c6e397','#85b9bc','#d8ae7d','#c394ad','#859dd1','#b6c37a','#d1917e','#7db598','#a9a2cc'];
-const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,perception:null,volumetry:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
+const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,perception:null,calibration:null,volumetry:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
 let pollTimer, toastTimer, uploadLabel, baseImage, baseImageData, edgeData,
   maskLayer=document.createElement('canvas'), undo=[], paint=false, lastPoint=null,
   showEdges=false, lassoPoints=[], lassoPath=[];
@@ -53,12 +53,13 @@ async function selectProject(id){
   render();
 }
 async function selectRun(run){
-  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.perception=null;state.volumetry=null;state.reconstruction=null;state.report=null;state.meshes=[];
+  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.perception=null;state.calibration=null;state.volumetry=null;state.reconstruction=null;state.report=null;state.meshes=[];
   if(run){
     const outputs=await Promise.all(run.stages.filter(s=>s.output_artifact_id&&!s.invalidated).map(async s=>({stage:s,data:await content(s.output_artifact_id)})));
     for(const {stage:s,data} of outputs){
       if(s.stage==='S05')state.segments.push({...data,artifact_id:s.output_artifact_id,view_id:data.observations[0]?.view_id});
       if(s.stage==='S06')state.matches={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S07C')state.calibration={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S08')state.graph={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S09')state.perception={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S09V')state.volumetry={...data,artifact_id:s.output_artifact_id};
@@ -308,29 +309,27 @@ function renderVolumetry(){
   const target=$('#volumetry-content');
   if(!target)return;
   const result=state.volumetry;
-  if(!result){target.className='panel padded empty-text';target.innerHTML='Execute o pipeline para gerar volumes por peça.';return;}
+  if(!result){target.className='panel padded empty-text';target.innerHTML='Execute o pipeline para gerar volumes calibrados.';return;}
   target.className='panel padded';
-  const scale=(value)=>Math.max(0,Math.min(1,value));
-  const spark=volume=>{
-    const slices=volume.slices||[];
-    if(!slices.length)return '';
-    const points=(key)=>{
-      const values=slices.map(s=>scale((s[key]||0)*2));
-      return values.map((v,i)=>`${(i/(values.length-1||1))*100},${48-v*42}`).join(' ');
-    };
-    return `<svg class="volume-profile" viewBox="0 0 100 52" preserveAspectRatio="none" aria-label="Perfil volumétrico"><line x1="0" y1="48" x2="100" y2="48"></line><polyline class="width-line" points="${points('half_width_norm')}"></polyline><polyline class="depth-line" points="${points('half_depth_norm')}"></polyline></svg>`;
-  };
-  const cards=result.volumes.map(v=>{
-    const ext=v.extents_xyz||[0,0,0];
-    return `<article class="volume-card"><div class="volume-card-head"><strong>${esc(v.name)}</strong><span>${Math.round(v.confidence*100)}%</span></div>${spark(v)}<div class="volume-legend"><span class="width-key">Largura</span><span class="depth-key">Profundidade</span></div><dl><div><dt>Dimensões</dt><dd>${ext.map(x=>Number(x).toFixed(3)).join(' × ')}</dd></div><div><dt>Seções</dt><dd>${v.slices.length}</dd></div><div><dt>Vistas</dt><dd>${v.source_views.map(x=>labels[x]||x).join(' · ')}</dd></div><div><dt>Concavidades</dt><dd>${v.concavity_support?'suportadas':'pendente depth/normals'}</dd></div></dl></article>`;
+  const calibration=state.calibration?.cameras||[];
+  const cameraRows=calibration.map(c=>{
+    const scale=c.mm_per_pixel!=null?`${Number(c.mm_per_pixel).toFixed(4)} mm/px`:`${Number(c.world_units_per_pixel||0).toFixed(6)} u/px`;
+    return `<div class="calibration-row"><span>${esc(labels[c.label]||c.label)}</span><strong>${c.calibrated?'✓ calibrada':'△ aproximação'}</strong><small>${scale}</small></div>`;
   }).join('');
-  target.innerHTML=`<div class="volume-summary"><div><small>MÉTODO</small><strong>${esc(result.method)}</strong></div><div><small>PEÇAS COM VOLUME</small><strong>${result.volumes.length}</strong></div><div><small>UNIDADE</small><strong>${esc(result.unit)}</strong></div></div><div class="volume-grid">${cards}</div><div class="perception-warnings">${result.warnings.map(w=>`<p>△ ${esc(w)}</p>`).join('')}</div>`;
+  const cards=result.volumes.map(v=>{
+    const ext=v.extents_xyz||[0,0,0], field=v.field||{}, metrics=v.reprojection_metrics||[];
+    const metricRows=metrics.map(m=>`<div class="reprojection-row"><span>${esc(labels[m.view_label]||m.view_label)}</span><strong class="${m.silhouette_iou>=.9?'good':'warn'}">${(m.silhouette_iou*100).toFixed(1)}%</strong><small>erro área ${(m.area_error_ratio*100).toFixed(1)}%</small></div>`).join('');
+    const grid=field.grid_shape?field.grid_shape.join(' × '):'—';
+    const voxel=field.voxel_size_mm!=null?`${Number(field.voxel_size_mm).toFixed(3)} mm`:`${Number(field.voxel_size_world||0).toFixed(5)} ${esc(field.unit||result.unit)}`;
+    return `<article class="volume-card calibrated"><div class="volume-card-head"><strong>${esc(v.name)}</strong><span>IoU ${((v.mean_reprojection_iou||0)*100).toFixed(1)}%</span></div><dl><div><dt>Dimensões</dt><dd>${ext.map(x=>Number(x).toFixed(3)).join(' × ')}</dd></div><div><dt>Grid</dt><dd>${esc(grid)}</dd></div><div><dt>Voxel</dt><dd>${esc(voxel)}</dd></div><div><dt>Representação</dt><dd>${field.representation?'Visual Hull + SDF':'Visual Hull v1'}</dd></div><div><dt>Concavidades</dt><dd>${v.concavity_support?'suportadas':'não suportadas'}</dd></div></dl><h4>Reprojeção</h4><div class="reprojection-list">${metricRows||'<p class="muted">Sem métricas nesta versão.</p>'}</div></article>`;
+  }).join('');
+  target.innerHTML=`<div class="volume-summary"><div><small>MÉTODO</small><strong>${esc(result.method)}</strong></div><div><small>PEÇAS COM VOLUME</small><strong>${result.volumes.length}</strong></div><div><small>UNIDADE</small><strong>${esc(result.unit)}</strong></div></div><div class="volumetry-diagnostics"><section><h3>Calibração</h3>${cameraRows||'<p class="muted">Calibração indisponível.</p>'}</section><section><h3>Critério geométrico</h3><p class="check-intro">MESH VALID ≠ GEOMETRY ACCURATE. A fidelidade agora é medida reprojetando o volume nas referências.</p></section></div><div class="volume-grid">${cards}</div><div class="perception-warnings">${result.warnings.map(w=>`<p>△ ${esc(w)}</p>`).join('')}</div>`;
 }
 
 function renderValidation(){
   if(!state.report){$('#validation').innerHTML='<p class="muted">Nenhuma geometria gerada.</p>';return;}
   const checks=Object.groupBy?Object.groupBy(state.report.checks,c=>c.code):state.report.checks.reduce((a,c)=>((a[c.code]??=[]).push(c),a),{});
-  const titles={manifold:'Malha fechada',normals:'Normais orientadas',nonzero_faces:'Faces não degeneradas',physical_scale:'Escala física',wall_thickness:'Espessura de parede',clearance:'Folgas',collisions:'Colisões',joint_range:'Articulações',separability:'Separabilidade'};
+  const titles={manifold:'Malha fechada',normals:'Normais orientadas',nonzero_faces:'Faces não degeneradas',physical_scale:'Escala física',scale_calibration:'Calibração multi-view',multiview_consistency:'Consistência multi-view',wall_thickness:'Espessura de parede',clearance:'Folgas',collisions:'Colisões',joint_range:'Articulações',separability:'Separabilidade'};
   $('#validation').innerHTML='<p class="check-intro">Revisão necessária. Este baseline ainda não está validado para fabricação.</p>'+Object.entries(checks).map(([key,items])=>{
     const ok=items.every(c=>c.status==='pass'),fail=items.some(c=>c.status==='fail');
     return `<div class="check-row"><span>${titles[key]||key}</span><span class="${ok?'pass':'warn'}">${ok?'✓ Verificado':fail?'✕ Falhou':items[0].status==='not_evaluated'?'Não avaliado':'Revisar'}</span></div>`;
