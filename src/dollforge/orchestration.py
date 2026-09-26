@@ -529,39 +529,78 @@ class Engine:
             ]
 
             def build_volume():
-                request = VolumetryRequest(
-                    project_id=run.project_id,
-                    graph=graph,
-                    perception=perception_value,
-                    observations=observations,
-                    views=run.views,
-                    cameras=calibrated_cameras.cameras,
-                    mask_png_by_observation={
-                        observation.observation_id: self.store.read(observation.mask_artifact_id)
-                        for observation in observations
-                    },
-                    resolution=run.config.volumetry_resolution,
-                )
-                if hasattr(volumetry_adapter, "build_with_fields"):
-                    result, fields = volumetry_adapter.build_with_fields(request)
-                    by_part = {volume.part_instance_id: volume for volume in result.volumes}
-                    for field in fields:
-                        volume = by_part.get(field.part_instance_id)
-                        if volume is None or volume.field is None:
-                            continue
-                        artifact = self.put(
-                            run,
-                            Stage.VOLUMETRY,
-                            f"volume_field:{field.part_instance_id}.npz",
-                            field.payload,
-                            volumetry_inputs,
-                            media_type="application/x-npz",
-                            provenance=volume.provenance,
-                            version=volumetry_adapter.model_version,
-                        )
-                        volume.field.artifact_id = artifact.artifact_id
-                    return result
-                return volumetry_adapter.build(request)
+                masks = {
+                    observation.observation_id: self.store.read(observation.mask_artifact_id)
+                    for observation in observations
+                }
+                initial_parameters = {
+                    "resolution": run.config.volumetry_resolution,
+                    "soft_support_threshold": .80,
+                }
+
+                def generate_volume(parameters):
+                    request = VolumetryRequest(
+                        project_id=run.project_id,
+                        graph=graph,
+                        perception=perception_value,
+                        observations=observations,
+                        views=run.views,
+                        cameras=calibrated_cameras.cameras,
+                        mask_png_by_observation=masks,
+                        resolution=int(parameters.get(
+                            "resolution",
+                            run.config.volumetry_resolution,
+                        )),
+                        parameters=parameters,
+                    )
+                    if hasattr(volumetry_adapter, "build_with_fields"):
+                        return volumetry_adapter.build_with_fields(request)
+                    return volumetry_adapter.build(request), []
+
+                if run.config.quality_loop_enabled:
+                    candidate, trace = run_quality_loop(
+                        stage=Stage.VOLUMETRY,
+                        scope="all",
+                        specialist=volumetry_adapter.model_id,
+                        initial_parameters=initial_parameters,
+                        max_attempts=run.config.quality_max_attempts,
+                        generate=generate_volume,
+                        evaluate=lambda candidate: volumetry_limit(
+                            candidate[0],
+                            iou_threshold=run.config.volumetry_iou_limit,
+                            outside_area_threshold=run.config.volumetry_outside_area_limit,
+                            overshoot_px_threshold=run.config.volumetry_overshoot_px_limit,
+                        ),
+                        tune=tune_volumetry,
+                    )
+                    self.record_quality_trace(
+                        run,
+                        Stage.VOLUMETRY,
+                        "all",
+                        volumetry_inputs,
+                        trace,
+                    )
+                else:
+                    candidate = generate_volume(initial_parameters)
+
+                result, fields = candidate
+                by_part = {volume.part_instance_id: volume for volume in result.volumes}
+                for field in fields:
+                    volume = by_part.get(field.part_instance_id)
+                    if volume is None or volume.field is None:
+                        continue
+                    artifact = self.put(
+                        run,
+                        Stage.VOLUMETRY,
+                        f"volume_field:{field.part_instance_id}.npz",
+                        field.payload,
+                        volumetry_inputs,
+                        media_type="application/x-npz",
+                        provenance=volume.provenance,
+                        version=volumetry_adapter.model_version,
+                    )
+                    volume.field.artifact_id = artifact.artifact_id
+                return result
 
             volumetry_art = self.node(
                 run,
