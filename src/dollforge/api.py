@@ -173,6 +173,10 @@ def create_app(service: Service | None = None) -> FastAPI:
         for stage in run.stages:
             if stage.output_artifact_id:
                 collect(stage.output_artifact_id)
+            if stage.quality_trace_artifact_id:
+                collect(stage.quality_trace_artifact_id)
+            if stage.training_signal_artifact_id:
+                collect(stage.training_signal_artifact_id)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", run.model_dump_json(indent=2))
