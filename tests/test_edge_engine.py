@@ -10,7 +10,7 @@ def test_sobel_edge_map_finds_internal_color_boundary():
 
     edges = sobel_edge_map(image)
 
-    assert edges[:, 59:62].mean() > .75
+    assert edges[:, 59:61].mean() > .90
     assert edges[:, 15:45].mean() < .05
 
 
