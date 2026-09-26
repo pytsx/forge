@@ -202,12 +202,18 @@ def volumetry_limit(
     reprojection = _reprojection_metrics(result)
     if reprojection:
         mean_iou = float(np.mean([metric.silhouette_iou for metric in reprojection]))
-        max_outside = float(max(metric.outside_area_ratio for metric in reprojection))
-        max_overshoot = float(max(metric.max_overshoot_px for metric in reprojection))
+        hard_metrics = [metric for metric in reprojection if metric.hard_constraint]
+        boundary_metrics = hard_metrics or reprojection
+        max_outside = float(max(
+            metric.outside_area_ratio for metric in boundary_metrics
+        ))
+        max_overshoot = float(max(
+            metric.max_overshoot_px for metric in boundary_metrics
+        ))
     else:
         mean_iou = 0.0
         max_outside = 1.0
-        max_overshoot = float("inf")
+        max_overshoot = 1_000_000.0
 
     metrics = [
         _metric("mean_reprojection_iou", mean_iou, iou_threshold, "gte", hard=True),
