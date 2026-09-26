@@ -159,14 +159,14 @@ def test_visual_hull_uses_front_and_side_profiles_to_make_real_volume():
             front_obs.observation_id: ellipse_mask(front_obs.bbox_xyxy),
             left_obs.observation_id: ellipse_mask(left_obs.bbox_xyxy),
         },
-        resolution=24,
+        resolution=32,
     ))
 
     assert len(result.volumes) == 1
     volume = result.volumes[0]
     assert volume.concavity_support is False
     assert volume.extents_xyz[0] > volume.extents_xyz[1]
-    assert len(volume.slices) == 24
+    assert len(volume.slices) == 32
     assert volume.slices[len(volume.slices) // 2].half_width_norm > volume.slices[0].half_width_norm
     mesh = trimesh.Trimesh(np.asarray(volume.vertices), np.asarray(volume.faces), process=True)
     assert mesh.is_watertight
@@ -183,7 +183,7 @@ def test_pipeline_defaults_to_volumetry_and_volume_mesh():
     from dollforge.domain.models import PipelineConfig, Stage
 
     config = PipelineConfig()
-    assert config.volumetry_adapter == "silhouette_visual_hull_v1"
+    assert config.volumetry_adapter == "calibrated_visual_hull_sdf_v2"
     assert config.reconstruction_adapter == "silhouette_volume_mesh_v1"
-    assert config.volumetry_resolution == 32
+    assert config.volumetry_resolution == 64
     assert Stage.VOLUMETRY == "S09V"

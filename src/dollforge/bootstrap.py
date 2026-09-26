@@ -16,6 +16,7 @@ from dollforge.perception.graph import StructuredPerceptionBuilder
 from dollforge.service import Service
 from dollforge.storage import Store
 from dollforge.volumetry.silhouette import SilhouetteVisualHull
+from dollforge.volumetry.visual_hull import CalibratedVisualHullSDF
 
 
 def create_service(root: Path | None = None) -> Service:
@@ -28,6 +29,8 @@ def create_service(root: Path | None = None) -> Service:
     contour = ContourDollSegmenter()
     templates = DollTemplateReconstructor()
     volume_reconstructor = SilhouetteVolumeReconstructor()
+    calibrated_volume = CalibratedVisualHullSDF()
+    silhouette_volume = SilhouetteVisualHull()
     segmenters = {contour.model_id: contour}
     if os.environ.get("DOLLFORGE_GDINO_CONFIG") and os.environ.get("DOLLFORGE_GDINO_CHECKPOINT"):
         segmenters["grounded_sam2_v1"] = GroundedSam2Segmenter.from_environment()
@@ -39,7 +42,8 @@ def create_service(root: Path | None = None) -> Service:
         segmenters=segmenters,
         matcher=MultiSignalMatcher(),
         perception=StructuredPerceptionBuilder(),
-        volumetry=SilhouetteVisualHull(),
+        volumetry=calibrated_volume,
+        volumetries={silhouette_volume.model_id: silhouette_volume},
         reconstructors={
             templates.model_id: templates,
             volume_reconstructor.model_id: volume_reconstructor,

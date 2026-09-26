@@ -51,6 +51,7 @@ from dollforge.domain.models import (
 from dollforge.errors import DomainError, InvalidInput
 from dollforge.perception.models import PerceptionGraph
 from dollforge.storage import Store, canonical, digest
+from dollforge.volumetry.calibration import calibrate_views
 
 log = structlog.get_logger()
 
@@ -75,6 +76,7 @@ class Engine:
                  matcher: MatchingAdapter | None = None,
                  perception: PerceptionAdapter | None = None,
                  volumetry: VolumetryAdapter | None = None,
+                 volumetries: dict[str, VolumetryAdapter] | None = None,
                  reconstructors: dict[str, ReconstructionAdapter] | None = None):
         self.store = store
         self.segmenter = segmenter
@@ -85,6 +87,10 @@ class Engine:
         self.matcher = matcher
         self.perception = perception
         self.volumetry = volumetry
+        self.volumetries = (
+            {volumetry.model_id: volumetry, **(volumetries or {})}
+            if volumetry is not None else dict(volumetries or {})
+        )
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -104,12 +110,13 @@ class Engine:
         return self.perception
 
     def volumetry_adapter(self, adapter_id: str) -> VolumetryAdapter:
-        if self.volumetry is None or self.volumetry.model_id != adapter_id:
-            available = self.volumetry.model_id if self.volumetry is not None else "none"
+        adapter = self.volumetries.get(adapter_id)
+        if adapter is None:
+            available = ", ".join(sorted(self.volumetries)) or "none"
             raise InvalidInput(
-                f"Volumetry adapter '{adapter_id}' não configurado. Disponível: {available}"
+                f"Volumetry adapter '{adapter_id}' não configurado. Disponíveis: {available}"
             )
-        return self.volumetry
+        return adapter
 
     def reconstruction_adapter(self, adapter_id: str) -> ReconstructionAdapter:
         adapter = self.reconstructors.get(adapter_id)
@@ -182,7 +189,7 @@ class Engine:
             raw = [v.normalized_artifact_id for v in run.views]
             camera = self.node(run, Stage.CAMERA, "all", raw, lambda: CameraResult(cameras=[
                 CameraEstimate(view_id=v.view_id, label=v.label,
-                    yaw_deg={"front": 0, "left": 90, "back": 180, "right": -90}.get(v.label, 0),
+                    yaw_deg={"front": 0, "right": 90, "back": 180, "left": -90}.get(v.label, 0),
                     provenance=Provenance(type="rule_based", source="view_label_yaw_v1",
                         evidence=[v.normalized_artifact_id], note="Câmera não calibrada."))
                 for v in run.views]), replay=replay)
@@ -274,6 +281,22 @@ class Engine:
                     else "normalized_height_1", note="Altura fornecida" if
                     run.project_snapshot.known_height_mm else "Sem escala física conhecida")), replay=replay)
             scale_value = ScaleEstimate.model_validate(self.store.json(scale.artifact_id))
+            calibration = self.node(
+                run,
+                Stage.CALIBRATION,
+                "all",
+                [scale.artifact_id, *segments],
+                lambda: CameraResult(cameras=calibrate_views(
+                    scale_value,
+                    observations,
+                    run.views,
+                )),
+                version="1.0.0",
+                replay=replay,
+            )
+            calibrated_cameras = CameraResult.model_validate(
+                self.store.json(calibration.artifact_id)
+            )
             graph_art = self.node(run, Stage.GRAPH, "all", [matches.artifact_id, scale.artifact_id],
                 lambda: self.graph(run, matched, scale_value), replay=replay)
             graph = DollGraph.model_validate(self.store.json(graph_art.artifact_id))
@@ -322,22 +345,44 @@ class Engine:
             volumetry_inputs = [
                 perception_art.artifact_id,
                 graph_art.artifact_id,
+                calibration.artifact_id,
                 *[observation.mask_artifact_id for observation in observations],
             ]
 
             def build_volume():
-                return volumetry_adapter.build(VolumetryRequest(
+                request = VolumetryRequest(
                     project_id=run.project_id,
                     graph=graph,
                     perception=perception_value,
                     observations=observations,
                     views=run.views,
+                    cameras=calibrated_cameras.cameras,
                     mask_png_by_observation={
                         observation.observation_id: self.store.read(observation.mask_artifact_id)
                         for observation in observations
                     },
                     resolution=run.config.volumetry_resolution,
-                ))
+                )
+                if hasattr(volumetry_adapter, "build_with_fields"):
+                    result, fields = volumetry_adapter.build_with_fields(request)
+                    by_part = {volume.part_instance_id: volume for volume in result.volumes}
+                    for field in fields:
+                        volume = by_part.get(field.part_instance_id)
+                        if volume is None or volume.field is None:
+                            continue
+                        artifact = self.put(
+                            run,
+                            Stage.VOLUMETRY,
+                            f"volume_field:{field.part_instance_id}.npz",
+                            field.payload,
+                            volumetry_inputs,
+                            media_type="application/x-npz",
+                            provenance=volume.provenance,
+                            version=volumetry_adapter.model_version,
+                        )
+                        volume.field.artifact_id = artifact.artifact_id
+                    return result
+                return volumetry_adapter.build(request)
 
             volumetry_art = self.node(
                 run,
@@ -398,7 +443,12 @@ class Engine:
             candidates = [MeshCandidate.model_validate(self.store.json(m.preview_artifact_id))
                           for m in reconstructed.meshes]
             self.node(run, Stage.VALIDATION, "all", [reconstruction.artifact_id],
-                      lambda: self.validate(candidates, graph.scale.unit), replay=replay)
+                      lambda: self.validate(
+                          candidates,
+                          graph.scale.unit,
+                          volumetry_value,
+                          calibrated_cameras.cameras,
+                      ), replay=replay)
             if run.config.build_blender:
                 def build():
                     data, version = self.blender.build(candidates, graph.scale.unit)
@@ -465,7 +515,13 @@ class Engine:
         return DollGraph(project_id=run.project_id, root_part_id=root.part_instance_id,
                          parts=matches.parts, joints=joints, scale=scale)
 
-    def validate(self, candidates: list[MeshCandidate], unit: str) -> ManufacturingReport:
+    def validate(
+        self,
+        candidates: list[MeshCandidate],
+        unit: str,
+        volumetry: VolumetryResult | None = None,
+        cameras: list[CameraEstimate] | None = None,
+    ) -> ManufacturingReport:
         checks = []
         for candidate in candidates:
             mesh = trimesh.Trimesh(candidate.vertices, candidate.faces, process=False)
@@ -476,6 +532,35 @@ class Engine:
                                     part_instance_id=candidate.part_instance_id, message=name))
         checks.append(Check(code="physical_scale", status="pass" if unit == "mm" else "warn",
                             message="Escala física fornecida" if unit == "mm" else "Escala relativa"))
+        if cameras is not None:
+            calibrated = [camera for camera in cameras if camera.calibrated]
+            checks.append(Check(
+                code="scale_calibration",
+                status="pass" if len(calibrated) >= 4 else "warn",
+                measurement=float(len(calibrated)),
+                message=f"{len(calibrated)}/4 vistas calibradas no sistema canônico.",
+            ))
+        if volumetry is not None:
+            for volume in volumetry.volumes:
+                for metric in volume.reprojection_metrics:
+                    checks.append(Check(
+                        code=f"reprojection_{metric.view_label}",
+                        status="pass" if metric.silhouette_iou >= .90 else "warn",
+                        part_instance_id=volume.part_instance_id,
+                        measurement=metric.silhouette_iou,
+                        message=(
+                            f"Fidelidade de silhueta {metric.view_label}: "
+                            f"{metric.silhouette_iou:.1%}"
+                        ),
+                    ))
+                if volume.reprojection_metrics:
+                    checks.append(Check(
+                        code="multiview_consistency",
+                        status="pass" if volume.mean_reprojection_iou >= .90 else "warn",
+                        part_instance_id=volume.part_instance_id,
+                        measurement=volume.mean_reprojection_iou,
+                        message=f"Mean reprojection IoU: {volume.mean_reprojection_iou:.1%}",
+                    ))
         for name in ("wall_thickness", "clearance", "collisions", "joint_range", "separability"):
             checks.append(Check(code=name, status="not_evaluated",
                                 message="Requer validação mecânica especializada."))

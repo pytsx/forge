@@ -90,6 +90,7 @@ class Stage(StrEnum):
     SEGMENTATION = "S05"
     MATCHING = "S06"
     SCALE = "S07"
+    CALIBRATION = "S07C"
     GRAPH = "S08"
     PERCEPTION = "S09"
     VOLUMETRY = "S09V"
@@ -145,9 +146,16 @@ class ImageView(DTO):
 class CameraEstimate(DTO):
     view_id: UUID
     label: ViewLabel
-    projection: Literal["orthographic_assumption"] = "orthographic_assumption"
+    projection: Literal[
+        "orthographic_assumption",
+        "orthographic_calibrated",
+    ] = "orthographic_assumption"
     yaw_deg: float
-    calibrated: Literal[False] = False
+    calibrated: bool = False
+    world_units_per_pixel: float | None = Field(default=None, gt=0)
+    mm_per_pixel: float | None = Field(default=None, gt=0)
+    principal_point_px: tuple[float, float] | None = None
+    world_from_view: list[float] | None = Field(default=None, min_length=16, max_length=16)
     confidence: Score = 0.3
     provenance: Provenance
 
@@ -308,13 +316,16 @@ class PipelineConfig(DTO):
     segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "grounded_sam2_v1"] = "contour_rules_v2"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
     perception_adapter: Literal["structured_perception_v1"] = "structured_perception_v1"
-    volumetry_adapter: Literal["silhouette_visual_hull_v1"] = "silhouette_visual_hull_v1"
+    volumetry_adapter: Literal[
+        "silhouette_visual_hull_v1",
+        "calibrated_visual_hull_sdf_v2",
+    ] = "calibrated_visual_hull_sdf_v2"
     reconstruction_adapter: Literal[
         "ellipsoid_multiview_v1",
         "doll_templates_multiview_v2",
         "silhouette_volume_mesh_v1",
     ] = "silhouette_volume_mesh_v1"
-    volumetry_resolution: int = Field(default=32, ge=16, le=64)
+    volumetry_resolution: int = Field(default=64, ge=32, le=128)
     foreground_threshold: int = Field(default=32, ge=1, le=254)
     review_threshold: Score = 0.85
     build_blender: bool = True
