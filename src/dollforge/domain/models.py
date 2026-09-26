@@ -91,6 +91,7 @@ class Stage(StrEnum):
     MATCHING = "S06"
     SCALE = "S07"
     GRAPH = "S08"
+    PERCEPTION = "S09"
     RECONSTRUCTION = "S10"
     BLENDER = "S15"
     VALIDATION = "S16"
@@ -305,6 +306,7 @@ class PipelineConfig(DTO):
     seed: int = 42
     segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "grounded_sam2_v1"] = "contour_rules_v2"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
+    perception_adapter: Literal["structured_perception_v1"] = "structured_perception_v1"
     reconstruction_adapter: Literal["ellipsoid_multiview_v1", "doll_templates_multiview_v2"] = "doll_templates_multiview_v2"
     foreground_threshold: int = Field(default=32, ge=1, le=254)
     review_threshold: Score = 0.85

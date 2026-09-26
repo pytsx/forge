@@ -13,6 +13,7 @@ from dollforge.domain.models import (
     Provenance,
     Score,
 )
+from dollforge.perception.models import PerceptionGraph
 
 
 class MaskProposal(DTO):
@@ -51,6 +52,17 @@ class MatchingResult(DTO):
 
 class CameraResult(DTO):
     cameras: list[CameraEstimate]
+
+
+class PerceptionRequest(DTO):
+    project_id: UUID
+    graph_artifact_id: UUID
+    graph: DollGraph
+    observations: list[PartObservation]
+    views: list[ImageView]
+    image_png_by_view: dict[UUID, bytes]
+    mask_png_by_observation: dict[UUID, bytes]
+    style_family: str | None = None
 
 
 class MeshCandidate(DTO):
@@ -112,6 +124,13 @@ class MatchingAdapter(Protocol):
     model_version: str
 
     def match(self, request: MatchingRequest) -> MatchingResult: ...
+
+
+class PerceptionAdapter(Protocol):
+    model_id: str
+    model_version: str
+
+    def describe(self, request: PerceptionRequest) -> PerceptionGraph: ...
 
 
 class ReconstructionAdapter(Protocol):
