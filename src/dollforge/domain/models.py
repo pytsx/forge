@@ -328,7 +328,7 @@ class PipelineConfig(DTO):
     volumetry_resolution: int = Field(default=64, ge=32, le=128)
     foreground_threshold: int = Field(default=32, ge=1, le=254)
     review_threshold: Score = 0.85
-    quality_loop_enabled: bool = True
+    quality_loop_enabled: Literal[True] = True
     quality_max_attempts: int = Field(default=3, ge=1, le=6)
     segmentation_boundary_limit: Score = 0.42
     segmentation_confidence_limit: Score = 0.52
@@ -338,8 +338,8 @@ class PipelineConfig(DTO):
     volumetry_iou_limit: Score = 0.95
     volumetry_outside_area_limit: float = Field(default=0.02, ge=0, le=.20)
     volumetry_overshoot_px_limit: float = Field(default=2.0, ge=0, le=10)
-    quality_fail_closed: bool = True
-    retrain_on_limit_exhaustion: bool = True
+    quality_fail_closed: Literal[True] = True
+    retrain_on_limit_exhaustion: Literal[True] = True
     build_blender: bool = True
     cache: bool = True
 
