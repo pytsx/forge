@@ -175,12 +175,18 @@ class Engine:
                 )
                 if node is not None:
                     node.training_signal_artifact_id = training_artifact.artifact_id
-            if run.config.quality_fail_closed:
-                raise QualityLimitExceeded(
-                    f"{stage}:{scope} não atingiu o limite após "
-                    f"{len(trace.attempts)} tentativas. Caso marcado para revisão/retreino."
-                )
         return trace_artifact
+
+    def enforce_quality_limit(self, run: RunManifest, stage: Stage, scope: str) -> None:
+        node_id = f"{stage}:{scope}"
+        node = next((item for item in reversed(run.stages) if item.node_id == node_id), None)
+        if node is None:
+            raise QualityLimitExceeded(f"Prova de qualidade ausente para {node_id}.")
+        if node.quality_status == "retrain_candidate" and run.config.quality_fail_closed:
+            raise QualityLimitExceeded(
+                f"{node_id} não atingiu o limite após {node.quality_attempts} tentativas. "
+                "O melhor resultado foi preservado para revisão e o caso foi marcado para retreino."
+            )
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -384,6 +390,7 @@ class Engine:
                     return SegmentationResult(observations=items, warnings=[warning])
                 artifact = self.node(run, Stage.SEGMENTATION, str(view.view_id),
                     [view.normalized_artifact_id], segment, segmenter.model_version, replay)
+                self.enforce_quality_limit(run, Stage.SEGMENTATION, str(view.view_id))
                 segments.append(artifact.artifact_id)
                 observations.extend(SegmentationResult.model_validate(
                     self.store.json(artifact.artifact_id)).observations)
@@ -463,6 +470,7 @@ class Engine:
                 run, Stage.MATCHING, "all", matching_inputs, match_views, matching_version,
                 replay=replay,
             )
+            self.enforce_quality_limit(run, Stage.MATCHING, "all")
             matched = MatchingResult.model_validate(self.store.json(matches.artifact_id))
             scale = self.node(run, Stage.SCALE, "all", [camera.artifact_id], lambda: ScaleEstimate(
                 mode="absolute" if run.project_snapshot.known_height_mm else "relative",
@@ -625,6 +633,7 @@ class Engine:
                 volumetry_adapter.model_version,
                 replay=replay,
             )
+            self.enforce_quality_limit(run, Stage.VOLUMETRY, "all")
             volumetry_value = VolumetryResult.model_validate(
                 self.store.json(volumetry_art.artifact_id)
             )
