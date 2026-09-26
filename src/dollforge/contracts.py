@@ -86,6 +86,7 @@ class ReprojectionMetric(DTO):
     max_overshoot_px: float = Field(ge=0)
     max_overshoot_mm: float | None = Field(default=None, ge=0)
     boundary_rmse_px: float | None = Field(default=None, ge=0)
+    hard_constraint: bool = False
     hard_boundary_compliant: bool = True
 
 
