@@ -14,8 +14,8 @@ from dollforge.adapters.volumetric import SilhouetteVolumeReconstructor
 from dollforge.orchestration import Engine
 from dollforge.perception.graph import StructuredPerceptionBuilder
 from dollforge.service import Service
-from dollforge.volumetry.silhouette import SilhouetteVisualHull
 from dollforge.storage import Store
+from dollforge.volumetry.silhouette import SilhouetteVisualHull
 
 
 def create_service(root: Path | None = None) -> Service:
