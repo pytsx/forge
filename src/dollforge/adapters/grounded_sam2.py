@@ -125,8 +125,8 @@ class GroundedSam2Segmenter:
         detections, phrases = self.dino.predict_with_caption(
             image=bgr,
             caption=PROMPT,
-            box_threshold=self.box_threshold,
-            text_threshold=self.text_threshold,
+            box_threshold=float(request.parameters.get("box_threshold", self.box_threshold)),
+            text_threshold=float(request.parameters.get("text_threshold", self.text_threshold)),
         )
         boxes = np.asarray(detections.xyxy)
         confidences = np.asarray(detections.confidence)
