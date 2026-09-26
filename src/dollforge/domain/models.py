@@ -328,6 +328,18 @@ class PipelineConfig(DTO):
     volumetry_resolution: int = Field(default=64, ge=32, le=128)
     foreground_threshold: int = Field(default=32, ge=1, le=254)
     review_threshold: Score = 0.85
+    quality_loop_enabled: bool = True
+    quality_max_attempts: int = Field(default=3, ge=1, le=6)
+    segmentation_boundary_limit: Score = 0.42
+    segmentation_confidence_limit: Score = 0.52
+    segmentation_coverage_limit: Score = 0.80
+    matching_confidence_limit: Score = 0.55
+    matching_coverage_limit: Score = 0.55
+    volumetry_iou_limit: Score = 0.95
+    volumetry_outside_area_limit: float = Field(default=0.02, ge=0, le=.20)
+    volumetry_overshoot_px_limit: float = Field(default=2.0, ge=0, le=10)
+    quality_fail_closed: bool = True
+    retrain_on_limit_exhaustion: bool = True
     build_blender: bool = True
     cache: bool = True
 
@@ -341,6 +353,14 @@ class StageResult(DTO):
     cache_key: str
     cached: bool = False
     invalidated: bool = False
+    quality_status: Literal[
+        "not_evaluated",
+        "passed",
+        "retrain_candidate",
+    ] = "not_evaluated"
+    quality_attempts: int = Field(default=0, ge=0)
+    quality_score: Score | None = None
+    quality_trace_artifact_id: UUID | None = None
     error: str | None = None
 
 
