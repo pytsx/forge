@@ -323,8 +323,18 @@ document.addEventListener('click',event=>{const target=event.target.closest('but
     target.disabled=true;const run=await api(`/projects/${state.project.project_id}/runs`,{method:'POST',body:JSON.stringify({})});state.runs.unshift(run);await selectRun(run);setTab('pipeline');
   }
   if(target.dataset.observation){state.selected=target.dataset.observation;await loadMask();}
-  if(target.dataset.tool){state.tool=target.dataset.tool;$$('[data-tool]').forEach(b=>b.classList.toggle('active',b===target));$('#mask-canvas').style.cursor=state.tool==='inspect'?'default':'crosshair';}
-  if(target.id==='undo-mask'&&undo.length){maskLayer.getContext('2d').putImageData(undo.pop(),0,0);state.dirty=true;$('#save-mask').disabled=false;paintMask();}
+  if(target.dataset.tool){
+    if(state.tool==='lasso'&&target.dataset.tool!=='lasso'&&lassoPoints.length)resetLasso();
+    state.tool=target.dataset.tool;$('[data-tool]').forEach(b=>b.classList.toggle('active',b===target));toolCursor();
+  }
+  if(target.id==='undo-mask'&&undo.length){maskLayer.getContext('2d').putImageData(undo.pop(),0,0);markMaskDirty();paintMask();}
+  if(target.id==='toggle-edges'){showEdges=!showEdges;target.classList.toggle('active',showEdges);$('.canvas-wrap').classList.toggle('edge-mode',showEdges);paintMask();}
+  if(target.id==='refine-edge')maskOperation('refine');
+  if(target.id==='grow-mask')maskOperation('grow');
+  if(target.id==='shrink-mask')maskOperation('shrink');
+  if(target.id==='fill-holes')maskOperation('fill');
+  if(target.id==='finish-lasso')finishLasso();
+  if(target.id==='cancel-lasso')resetLasso();
   if(target.id==='save-mask')await submitReview(currentSegment().artifact_id,'remask',{target_id:state.selected,mask_png_base64:maskLayer.toDataURL('image/png').split(',')[1]});
   if(target.id==='relabel')await submitReview(currentSegment().artifact_id,'relabel',{target_id:state.selected,part_class:$('#part-class').value,side:$('#part-side').value});
   if(target.id==='approve-part'||target.id==='reject-part')await submitReview(currentSegment().artifact_id,target.id==='approve-part'?'approve':'reject',{target_id:state.selected});
@@ -340,9 +350,17 @@ $('#seg-view').addEventListener('change',event=>action(async()=>{state.activeVie
 $('#run-select').addEventListener('change',event=>action(()=>selectRun(state.runs.find(r=>r.run_id===event.target.value))));
 document.addEventListener('change',event=>{if(event.target.dataset.assignment)action(async()=>{const id=event.target.value==='new'?crypto.randomUUID():event.target.value;await submitReview(state.matches.artifact_id,'rematch',{assignments:{[event.target.dataset.assignment]:id},dimension:'cross_view_consistency'});});});
 const canvas=$('#mask-canvas');
-canvas.addEventListener('pointerdown',event=>{if(state.tool==='inspect'||!selectedObservation())return;paint=true;lastPoint=null;undo.push(maskLayer.getContext('2d').getImageData(0,0,maskLayer.width,maskLayer.height));if(undo.length>10)undo.shift();canvas.setPointerCapture(event.pointerId);paintPoint(event);});
-canvas.addEventListener('pointermove',event=>{if(paint)paintPoint(event);});
-canvas.addEventListener('pointerup',()=>{paint=false;lastPoint=null;});canvas.addEventListener('pointercancel',()=>{paint=false;});
+canvas.addEventListener('pointerdown',event=>{
+  if(state.tool==='inspect'||!selectedObservation())return;
+  if(state.tool==='region'||state.tool==='wand'){smartSelect(event,state.tool);return;}
+  if(state.tool==='lasso'){addLassoPoint(event);return;}
+  if(state.tool!=='add'&&state.tool!=='erase')return;
+  paint=true;lastPoint=null;pushUndo();canvas.setPointerCapture(event.pointerId);paintPoint(event);
+});
+canvas.addEventListener('pointermove',event=>{if(paint&&(state.tool==='add'||state.tool==='erase'))paintPoint(event);});
+canvas.addEventListener('pointerup',()=>{paint=false;lastPoint=null;});
+canvas.addEventListener('pointercancel',()=>{paint=false;lastPoint=null;});
+canvas.addEventListener('dblclick',event=>{if(state.tool==='lasso'){event.preventDefault();finishLasso();}});
 const gc=$('#geometry-canvas');gc.addEventListener('pointerdown',e=>{dragging=[e.clientX,e.clientY];gc.setPointerCapture(e.pointerId);});gc.addEventListener('pointermove',e=>{if(dragging){rotation+=(e.clientX-dragging[0])*.01;tilt=Math.max(-1,Math.min(1,tilt+(e.clientY-dragging[1])*.008));dragging=[e.clientX,e.clientY];draw3D();}});gc.addEventListener('pointerup',()=>dragging=null);gc.addEventListener('pointercancel',()=>dragging=null);gc.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.4,Math.min(3,zoom*Math.exp(-e.deltaY*.001)));draw3D();},{passive:false});window.addEventListener('resize',draw3D);
 const dimensions={segmentation_accuracy:'Precisão da segmentação',cross_view_consistency:'Consistência entre vistas',shape_fidelity:'Fidelidade da forma',style_fidelity:'Fidelidade do estilo',joint_correctness:'Articulações',connector_correctness:'Encaixes',assembly_quality:'Qualidade da montagem',printability:'Imprimibilidade',editability:'Editabilidade'};
 $('#score-fields').innerHTML=Object.entries(dimensions).map(([key,label])=>`<label>${label}<input type="number" min="0" max="1" step=".05" name="${key}" required placeholder="0 a 1"></label>`).join('');
