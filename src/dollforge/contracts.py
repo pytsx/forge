@@ -29,6 +29,14 @@ class SegmentationResult(DTO):
     warnings: list[str] = Field(default_factory=list)
 
 
+class MatchingRequest(DTO):
+    project_id: UUID
+    observations: list[PartObservation]
+    views: list[ImageView]
+    image_png_by_view: dict[UUID, bytes]
+    mask_png_by_observation: dict[UUID, bytes]
+
+
 class MatchingResult(DTO):
     parts: list[PartInstance]
     warnings: list[str] = Field(default_factory=list)
@@ -90,6 +98,13 @@ class SegmentationAdapter(Protocol):
     model_version: str
 
     def predict(self, request: SegmentationRequest) -> list[MaskProposal]: ...
+
+
+class MatchingAdapter(Protocol):
+    model_id: str
+    model_version: str
+
+    def match(self, request: MatchingRequest) -> MatchingResult: ...
 
 
 class ReconstructionAdapter(Protocol):
