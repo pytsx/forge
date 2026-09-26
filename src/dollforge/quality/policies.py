@@ -6,8 +6,8 @@ import numpy as np
 from PIL import Image
 
 from dollforge.contracts import (
-    MatchingResult,
     MaskProposal,
+    MatchingResult,
     ReprojectionMetric,
     VolumetryResult,
 )
