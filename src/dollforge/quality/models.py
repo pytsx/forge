@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import JsonValue, Literal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from dollforge.domain.models import DTO, Score, Stage
 
