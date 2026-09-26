@@ -10,7 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.10,<3", "fastapi>=0.115,<1", "uvicorn>=0.34,<1",
   "python-multipart>=0.0.20,<1", "typer>=0.15,<1", "Pillow>=11,<13",
-  "numpy>=2.2,<3", "trimesh>=4.6,<5", "structlog>=25,<27",
+  "numpy>=2.2,<3", "scipy>=1.15,<2", "scikit-image>=0.25,<1",
+  "trimesh>=4.6,<5", "structlog>=25,<27",
 ]
 
 [project.optional-dependencies]
