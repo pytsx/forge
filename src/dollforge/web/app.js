@@ -6,9 +6,9 @@ const labels = {front:'Frente',back:'Costas',left:'Esquerda',right:'Direita'};
 const names = {head:'Cabeça',torso:'Torso',pelvis:'Pelve',arm:'Braço',leg:'Perna',footwear:'Calçado',hand:'Mão',foot:'Pé',upper_arm:'Braço superior',forearm:'Antebraço',thigh:'Coxa',shin:'Canela',hair:'Cabelo',face:'Rosto',top:'Roupa superior',bottom:'Roupa inferior',accessory:'Acessório'};
 const sides = {left:'esquerdo',right:'direito',center:'central',unknown:'indefinido',bilateral:'bilateral'};
 const states = {queued:'Na fila',running:'Em execução',succeeded:'Concluído',failed:'Falhou',waiting_for_review:'Aguardando revisão',approved:'Aprovado',needs_review:'Revisar',corrected:'Corrigido',rejected:'Rejeitado',unreviewed:'Sem revisão'};
-const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S08:'DollGraph',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
+const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S08:'DollGraph',S09:'Perception Graph',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
 const colors = ['#c6e397','#85b9bc','#d8ae7d','#c394ad','#859dd1','#b6c37a','#d1917e','#7db598','#a9a2cc'];
-const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
+const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,perception:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
 let pollTimer, toastTimer, uploadLabel, baseImage, baseImageData, edgeData,
   maskLayer=document.createElement('canvas'), undo=[], paint=false, lastPoint=null,
   showEdges=false, lassoPoints=[], lassoPath=[];
@@ -53,13 +53,14 @@ async function selectProject(id){
   render();
 }
 async function selectRun(run){
-  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.reconstruction=null;state.report=null;state.meshes=[];
+  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.perception=null;state.reconstruction=null;state.report=null;state.meshes=[];
   if(run){
     const outputs=await Promise.all(run.stages.filter(s=>s.output_artifact_id&&!s.invalidated).map(async s=>({stage:s,data:await content(s.output_artifact_id)})));
     for(const {stage:s,data} of outputs){
       if(s.stage==='S05')state.segments.push({...data,artifact_id:s.output_artifact_id,view_id:data.observations[0]?.view_id});
       if(s.stage==='S06')state.matches={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S08')state.graph={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S09')state.perception={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S10')state.reconstruction=data;
       if(s.stage==='S16')state.report=data;
     }
@@ -114,7 +115,7 @@ function render(){
   $('#seg-view').innerHTML=viewOptions.map(v=>`<option value="${v.view_id}" ${v.view_id===state.activeView?'selected':''}>${esc(labels[v.label]||v.label)}</option>`).join('');
   if(!viewOptions.some(v=>v.view_id===state.activeView))state.activeView=viewOptions[0]?.view_id;
   $('#run-select').innerHTML=state.runs.map(r=>`<option value="${r.run_id}" ${r.run_id===run?.run_id?'selected':''}>${new Date(r.created_at).toLocaleString('pt-BR')} · ${r.run_id.slice(0,8)}</option>`).join('');
-  renderPipeline();renderObservations();renderMatches();renderValidation();
+  renderPipeline();renderObservations();renderMatches();renderPerception();renderValidation();
   $('#download').disabled=!run||invalid||['queued','running'].includes(run.status);
   $('#replay').disabled=!run||invalid||['queued','running'].includes(run.status);
   $('#final-review').disabled=!node('S16')||invalid;
@@ -280,6 +281,28 @@ function renderMatches(selectedId){
     return `<div class="match-card"><img src="${artifactUrl(o.mask_artifact_id)}" alt="Máscara ${esc(partName(o))}"><label>${labels[v.label]||v.label} · ${Math.round(o.confidence*100)}%</label><select data-assignment="${oid}" aria-label="Identidade da observação ${esc(labels[v.label])}">${parts.map(p=>`<option value="${p.part_instance_id}" ${p===selected?'selected':''}>${esc(partName(p))}</option>`).join('')}<option value="new">＋ Separar como nova peça</option></select><small>${esc(o.provenance.type)}</small></div>`;
   }).join('')}</div><p class="check-intro">Confirme rótulos e lados antes de agrupar. Alterações invalidam o grafo e a geometria dependentes.</p>`;
 }
+function renderPerception(){
+  const target=$('#perception-content');
+  if(!target)return;
+  const graph=state.perception;
+  if(!graph){target.className='panel padded empty-text';target.innerHTML='Execute o pipeline para gerar o Perception Graph.';return;}
+  target.className='panel padded';
+  const evidenceLabels={observed:'Observado',observed_multiview:'Observado multi-view',human_confirmed:'Confirmado pelo humano',inferred:'Inferido',prior:'Prior'};
+  const relationLabels={above:'acima de',below:'abaixo de',connected_to:'conectado a',attached_to:'anexado a',symmetric_to:'simétrico a'};
+  const partsById=Object.fromEntries(graph.parts.map(p=>[p.part_instance_id,p]));
+  const partLabel=id=>{const p=partsById[id];return p?partName(p):id.slice(0,8);};
+  const partCards=graph.parts.map(p=>{
+    const g=p.geometry;
+    const evidence=evidenceLabels[g.evidence_kind]||g.evidence_kind;
+    const depth=g.depth_norm==null?'—':g.depth_norm.toFixed(3);
+    const width=g.frontal_width_norm==null?'—':g.frontal_width_norm.toFixed(3);
+    return `<article class="perception-card"><div class="perception-card-head"><strong>${esc(partName(p))}</strong><span class="evidence ${esc(g.evidence_kind)}">${esc(evidence)}</span></div><p>${esc(g.shape_family)}</p><dl><div><dt>Altura relativa</dt><dd>${g.height_norm.toFixed(3)}</dd></div><div><dt>Largura frontal</dt><dd>${width}</dd></div><div><dt>Profundidade projetada</dt><dd>${depth}</dd></div><div><dt>Completude</dt><dd>${Math.round(g.completeness*100)}%</dd></div></dl><small>${p.observations.length} vista(s) · confiança ${Math.round(p.confidence*100)}%</small></article>`;
+  }).join('');
+  const relations=graph.relations.map(r=>`<div class="perception-row"><span>${esc(partLabel(r.subject_part_id))}</span><strong>${esc(relationLabels[r.predicate]||r.predicate)}</strong><span>${esc(partLabel(r.object_part_id))}</span><em class="evidence ${esc(r.evidence_kind)}">${esc(evidenceLabels[r.evidence_kind]||r.evidence_kind)}</em></div>`).join('')||'<p class="muted">Sem relações suficientes.</p>';
+  const interfaces=graph.interfaces.map(i=>`<div class="interface-row"><div><strong>${esc(partLabel(i.part_a_id))} ↔ ${esc(partLabel(i.part_b_id))}</strong><small>${esc(i.candidate_joint_type||i.role)}</small></div><span class="evidence ${esc(i.evidence_kind)}">${esc(evidenceLabels[i.evidence_kind]||i.evidence_kind)}</span></div>`).join('')||'<p class="muted">Nenhuma interface candidata.</p>';
+  target.innerHTML=`<div class="perception-summary"><div><small>OBJETO</small><strong>${esc(graph.object_type)}</strong></div><div><small>SIMETRIA</small><strong>${esc(graph.symmetry)}</strong></div><div><small>REGIÕES</small><strong>${graph.major_regions.map(esc).join(' · ')}</strong></div><div><small>ESTILO</small><strong>${esc(graph.style_family||'não informado')}</strong></div></div><h3>Peças percebidas</h3><div class="perception-grid">${partCards}</div><div class="perception-columns"><section><h3>Relações</h3>${relations}</section><section><h3>Interfaces candidatas</h3>${interfaces}</section></div><div class="perception-warnings">${graph.warnings.map(w=>`<p>△ ${esc(w)}</p>`).join('')}</div>`;
+}
+
 function renderValidation(){
   if(!state.report){$('#validation').innerHTML='<p class="muted">Nenhuma geometria gerada.</p>';return;}
   const checks=Object.groupBy?Object.groupBy(state.report.checks,c=>c.code):state.report.checks.reduce((a,c)=>((a[c.code]??=[]).push(c),a),{});
