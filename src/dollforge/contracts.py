@@ -3,8 +3,6 @@ from uuid import UUID
 
 from pydantic import Field
 
-from dollforge.perception.models import PerceptionGraph
-
 from dollforge.domain.models import (
     DTO,
     CameraEstimate,
@@ -15,6 +13,8 @@ from dollforge.domain.models import (
     Provenance,
     Score,
 )
+
+from dollforge.perception.models import PerceptionGraph
 
 
 class MaskProposal(DTO):
