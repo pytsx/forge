@@ -157,7 +157,7 @@ class Engine:
                     best_parameters=best.parameters,
                     failed_metrics=failed,
                 )
-                self.put(
+                training_artifact = self.put(
                     run,
                     Stage.KNOWLEDGE,
                     f"retrain_candidate:{stage}:{scope}",
@@ -173,6 +173,8 @@ class Engine:
                         ),
                     ),
                 )
+                if node is not None:
+                    node.training_signal_artifact_id = training_artifact.artifact_id
             if run.config.quality_fail_closed:
                 raise QualityLimitExceeded(
                     f"{stage}:{scope} não atingiu o limite após "
@@ -239,9 +241,18 @@ class Engine:
                              input_artifact_ids=inputs, cache_key=key)
         run.stages.append(result)
         self.store.save("run", run.run_id, run)
-        cached = self.store.cached(key) if run.config.cache else None
-        # Replay freezes reviewed input revisions rather than consulting today's review pointer.
-        if replay and stage in (Stage.SEGMENTATION, Stage.MATCHING, Stage.GRAPH):
+        quality_gated = (
+            run.config.quality_loop_enabled
+            and stage in (Stage.SEGMENTATION, Stage.MATCHING, Stage.VOLUMETRY)
+        )
+        cached = self.store.cached(key) if run.config.cache and not quality_gated else None
+        # Quality-gated stages rerun their proof even during replay; deterministic inputs
+        # should reproduce the same accepted attempt while preserving an explicit trace.
+        if (
+            replay
+            and not quality_gated
+            and stage in (Stage.SEGMENTATION, Stage.MATCHING, Stage.GRAPH)
+        ):
             old = next((s for s in replay.stages if s.node_id == node_id and not s.invalidated), None)
             if old and old.output_artifact_id:
                 cached = self.store.metadata(old.output_artifact_id)
@@ -260,7 +271,10 @@ class Engine:
                      node_id=node_id, cached=result.cached)
             return artifact
         except Exception as exc:
-            result.status = JobStatus.FAILED
+            result.status = (
+                JobStatus.REVIEW if isinstance(exc, QualityLimitExceeded)
+                else JobStatus.FAILED
+            )
             result.error = str(exc) if isinstance(exc, DomainError) else type(exc).__name__
             log.exception("stage_failed", run_id=str(run.run_id), stage=stage)
             raise
@@ -677,6 +691,10 @@ class Engine:
                 self.node(run, Stage.BLENDER, "all", [reconstruction.artifact_id], build,
                           self.blender.model_version, replay)
             run.status = JobStatus.REVIEW
+        except QualityLimitExceeded as exc:
+            run.status = JobStatus.REVIEW
+            run.error = str(exc)
+            log.warning("run_quality_limit_exhausted", run_id=str(run.run_id), error=str(exc))
         except Exception as exc:
             run.status = JobStatus.FAILED
             run.error = str(exc) if isinstance(exc, DomainError) else f"Falha interna: {type(exc).__name__}"
