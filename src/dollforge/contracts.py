@@ -4,7 +4,14 @@ from uuid import UUID
 from pydantic import Field
 
 from dollforge.domain.models import (
-    DTO, CameraEstimate, DollGraph, ImageView, PartInstance, PartObservation, Provenance, Score,
+    DTO,
+    CameraEstimate,
+    DollGraph,
+    ImageView,
+    PartInstance,
+    PartObservation,
+    Provenance,
+    Score,
 )
 
 
