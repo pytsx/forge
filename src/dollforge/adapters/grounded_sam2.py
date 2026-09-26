@@ -11,7 +11,6 @@ from dollforge.contracts import MaskProposal, SegmentationRequest
 from dollforge.domain.models import PartClass, Provenance, Side
 from dollforge.errors import DependencyUnavailable, InvalidInput
 
-
 PROMPT_LABELS: dict[str, tuple[PartClass, Side]] = {
     "head": (PartClass.HEAD, Side.CENTER),
     "face": (PartClass.FACE, Side.CENTER),

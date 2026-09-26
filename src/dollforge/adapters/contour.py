@@ -7,7 +7,8 @@ from PIL import Image, ImageFilter
 
 from dollforge.adapters.baseline import png
 from dollforge.contracts import MaskProposal, SegmentationRequest
-from dollforge.domain.models import PartObservation, Provenance, Side
+from dollforge.domain.models import PartObservation, Provenance
+from dollforge.vision.edges import boundary_adherence, edge_guided_region, sobel_edge_map
 
 
 def foreground_mask(image_png: bytes, threshold: int) -> np.ndarray:
@@ -62,7 +63,10 @@ class ContourDollSegmenter:
     model_version = "2.0.0"
 
     def predict(self, request: SegmentationRequest) -> list[MaskProposal]:
+        image = Image.open(BytesIO(request.image_png)).convert("RGB")
+        rgb = np.asarray(image)
         foreground = foreground_mask(request.image_png, request.threshold)
+        edges = sobel_edge_map(rgb)
         object_bounds = _bounds(foreground)
         if not object_bounds:
             return []
@@ -94,22 +98,42 @@ class ContourDollSegmenter:
             ]
 
         proposals: list[MaskProposal] = []
+        x0, y0, x1, y1 = object_bounds
+        bw, bh = x1 - x0, y1 - y0
         for part_class, side, cx, cy, rx, ry, px, py in specs:
             prior = _superellipse(foreground.shape, object_bounds, cx, cy, rx, ry, px, py)
-            mask = _mask_from_prior(foreground, prior)
+            allowed = foreground & prior
+            seed = (round(x0 + cx * bw), round(y0 + cy * bh))
+            region = edge_guided_region(
+                rgb,
+                allowed,
+                seed,
+                edges=edges,
+                edge_threshold=.62,
+                color_tolerance=.46,
+            )
+            # Fine texture can over-fragment a flood. The curved prior remains a safe fallback.
+            if region.sum() < max(12, allowed.sum() * .24):
+                region = allowed
+            mask = _mask_from_prior(foreground, region)
             box = _bounds(mask)
             if not box:
                 continue
+            adherence = boundary_adherence(mask, edges)
+            confidence = float(np.clip(.48 + .28 * adherence, .48, .72))
             proposals.append(MaskProposal(
                 part_class=part_class,
                 side=side,
                 bbox_xyxy=box,
-                confidence=.52,
+                confidence=confidence,
                 provenance=Provenance(
                     type="rule_based",
                     source=self.model_id,
                     evidence=[request.view.normalized_artifact_id],
-                    note="Prior curvo especializado em bonecos, recortado pelo contorno real da peça.",
+                    note=(
+                        "Prior curvo especializado em bonecos refinado por continuidade de cor "
+                        "e mapa de bordas Sobel."
+                    ),
                 ),
                 mask_png=png(Image.fromarray((mask * 255).astype("uint8"))),
             ))

@@ -6,7 +6,14 @@ import numpy as np
 import trimesh
 
 from dollforge.contracts import MeshCandidate
-from dollforge.domain.models import DollGraph, ImageView, PartClass, PartObservation, Provenance, Side
+from dollforge.domain.models import (
+    DollGraph,
+    ImageView,
+    PartClass,
+    PartObservation,
+    Provenance,
+    Side,
+)
 
 
 def _superellipsoid(extents: np.ndarray, exponent_xy: float = 2.0,

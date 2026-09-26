@@ -12,13 +12,26 @@ from dollforge.adapters.baseline import png
 from dollforge.adapters.contour import transfer_human_mask
 from dollforge.contracts import MatchingResult, SegmentationResult
 from dollforge.domain.models import (
-    CreateProject, DollGraph, DollProject, FeedbackEvent, ImageQA, ImageView, JobStatus,
-    PartInstance, PipelineConfig, Provenance, ReviewAction, ReviewRequest, ReviewState,
-    RunManifest, Stage, ViewLabel,
+    CreateProject,
+    DollGraph,
+    DollProject,
+    FeedbackEvent,
+    ImageQA,
+    ImageView,
+    JobStatus,
+    PartInstance,
+    PipelineConfig,
+    Provenance,
+    ReviewAction,
+    ReviewRequest,
+    ReviewState,
+    RunManifest,
+    Stage,
+    ViewLabel,
 )
 from dollforge.errors import Conflict, InvalidInput
 from dollforge.orchestration import Engine, lineage
-from dollforge.storage import Store, canonical
+from dollforge.storage import Store
 
 MAX_UPLOAD = 20 * 1024 * 1024
 FINAL_DIMENSIONS = {"segmentation_accuracy", "cross_view_consistency", "shape_fidelity",

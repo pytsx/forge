@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#101716"><title>DollForge · Estúdio</title>
-  <link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css"><script src="/static/segmentation-tools.js" defer></script><script src="/static/app.js" defer></script>
 </head>
 <body>
 <aside class="sidebar">
@@ -30,7 +30,29 @@
   </section>
   <section id="tab-segmentation" class="tab-panel" hidden>
     <div class="section-title"><div><h2>Revisão de segmentação</h2><p>Esquerda e direita são sempre do personagem.</p></div><select id="seg-view" aria-label="Vista para revisar"></select></div>
-    <div class="editor-grid"><article class="panel canvas-panel"><div class="editor-toolbar"><button data-tool="inspect" class="active">↖ Inspecionar</button><button data-tool="add">＋ Pincel</button><button data-tool="erase">− Borracha</button><label>Tamanho <input id="brush-size" type="range" min="2" max="80" value="18"></label><button id="undo-mask">↶ Desfazer</button></div><div class="canvas-wrap"><canvas id="mask-canvas" aria-label="Editor de máscara"></canvas><div id="mask-empty" class="empty-overlay">Execute o pipeline para revisar as máscaras.</div></div><div class="canvas-footer"><span id="mask-info">Selecione uma peça para editar</span><button id="save-mask" class="button primary small" disabled>Salvar correção</button></div></article><article class="panel inspector"><div class="inspector-heading"><h2>Peças da vista</h2><span id="observation-count" class="tag">0</span></div><div id="observations" class="observations"></div><div id="part-details"></div></article></div>
+    <div class="editor-grid"><article class="panel canvas-panel"><div class="editor-toolbar smart-toolbar">
+      <div class="tool-row primary-tools">
+        <button data-tool="inspect" class="active" title="Inspecionar sem editar">↖ Inspecionar</button>
+        <button data-tool="add" title="Adicionar com pincel">＋ Pincel</button>
+        <button data-tool="erase" title="Remover com pincel">− Borracha</button>
+        <button data-tool="region" title="Expande uma seleção respeitando cor e bordas">◉ Região inteligente</button>
+        <button data-tool="wand" title="Seleciona uma região semelhante com barreira de borda mais forte">✦ Varinha</button>
+        <button data-tool="lasso" title="Marque pontos próximos à borda; o caminho adere às arestas">⌁ Laço magnético</button>
+      </div>
+      <div class="tool-row smart-controls">
+        <label class="brush-control">Pincel <input id="brush-size" type="range" min="2" max="80" value="18"></label>
+        <label>Similaridade <input id="region-tolerance" type="range" min="8" max="80" value="38"></label>
+        <label>Bordas <input id="edge-sensitivity" type="range" min="10" max="95" value="62"></label>
+        <button id="toggle-edges" title="Sobrepor mapa de bordas">⌗ Bordas</button>
+        <button id="refine-edge" title="Reposicionar o limite da máscara nas bordas mais próximas">◎ Refinar borda</button>
+        <button id="grow-mask" title="Expandir máscara">＋ Expandir</button>
+        <button id="shrink-mask" title="Contrair máscara">− Contrair</button>
+        <button id="fill-holes" title="Preencher cavidades fechadas indesejadas">◌ Preencher</button>
+        <button id="finish-lasso" title="Fechar e aplicar laço" disabled>✓ Fechar laço</button>
+        <button id="cancel-lasso" title="Cancelar laço" disabled>× Cancelar</button>
+        <button id="undo-mask">↶ Desfazer</button>
+      </div>
+    </div><div class="canvas-wrap"><canvas id="mask-canvas" aria-label="Editor de máscara"></canvas><div id="mask-empty" class="empty-overlay">Execute o pipeline para revisar as máscaras.</div></div><div class="canvas-footer"><span id="mask-info">Selecione uma peça para editar</span><button id="save-mask" class="button primary small" disabled>Salvar correção</button></div></article><article class="panel inspector"><div class="inspector-heading"><h2>Peças da vista</h2><span id="observation-count" class="tag">0</span></div><div id="observations" class="observations"></div><div id="part-details"></div></article></div>
   </section>
   <section id="tab-matching" class="tab-panel" hidden><div class="section-title"><div><h2>Uma peça, múltiplas vistas</h2><p>Selecione uma identidade para conferir suas observações.</p></div><button id="approve-matches" class="button secondary">Aprovar correspondências</button></div><div id="matching-content" class="panel padded empty-text">Execute o pipeline para conectar as peças.</div></section>
   <section id="tab-geometry" class="tab-panel" hidden><div class="section-title"><div><h2>Montagem 3D</h2><p>Arraste para girar. Role para aproximar. Geometria baseline editável.</p></div><button id="download" class="button primary">↓ Exportar pacote</button></div><div class="editor-grid"><article class="panel geometry-panel"><canvas id="geometry-canvas" aria-label="Visualização 3D interativa"></canvas><span class="viewport-label">PERSPECTIVA <span>· Z ↑ · FRENTE −Y</span></span><span id="geometry-unit" class="viewport-unit">ESCALA RELATIVA</span></article><article class="panel inspector"><h2>Validação</h2><div id="validation" class="checks"><p class="muted">Nenhuma geometria gerada.</p></div><button id="final-review" class="button secondary full">Avaliação final</button></article></div></section>
