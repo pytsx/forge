@@ -11,6 +11,7 @@ from dollforge.adapters.grounded_sam2 import GroundedSam2Segmenter
 from dollforge.adapters.matching import MultiSignalMatcher
 from dollforge.adapters.templates import DollTemplateReconstructor
 from dollforge.orchestration import Engine
+from dollforge.perception.graph import StructuredPerceptionBuilder
 from dollforge.service import Service
 from dollforge.storage import Store
 
@@ -34,5 +35,6 @@ def create_service(root: Path | None = None) -> Service:
         HeadlessBlender(),
         segmenters=segmenters,
         matcher=MultiSignalMatcher(),
+        perception=StructuredPerceptionBuilder(),
         reconstructors={templates.model_id: templates},
     ))
