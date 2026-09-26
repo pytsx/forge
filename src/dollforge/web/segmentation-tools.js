@@ -64,7 +64,7 @@
         if(edge>edgeBarrier)continue;
         const seedDist=colorDistance(data,seed,next);
         const localDist=colorDistance(data,current,next);
-        const score=adaptive?.68*seedDist+.32*localDist:seedDist;
+        const score=adaptive ? .68*seedDist+.32*localDist : seedDist;
         if(score>tolerance)continue;
         selected[next]=1;queue[tail++]=next;
       }
