@@ -16,7 +16,7 @@ from dollforge.contracts import (
     VolumetryRequest,
     VolumetryResult,
 )
-from dollforge.domain.models import PartClass, PartObservation, ReviewState, ViewLabel
+from dollforge.domain.models import PartClass, PartObservation, ReviewState
 from dollforge.volumetry.metrics import evaluate_reprojection
 from dollforge.volumetry.projection import backproject_pixel_ray, project_world_points
 from dollforge.volumetry.sdf import extract_zero_surface, signed_distance_field
