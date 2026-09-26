@@ -159,10 +159,17 @@ class Engine:
                             mask_artifact_id=mask.artifact_id, provenance=proposal.provenance,
                             alternatives=["relabel", "remask"],
                         ))
-                    warning = (
-                        "Propostas proporcionais, sem modelo semântico; revise todas as vistas."
-                        if segmenter.model_id == "silhouette_rules_v1"
-                        else "Segmentação semântica Grounding DINO + SAM 2; revise baixa confiança e oclusões."
+                    warnings = {
+                        "silhouette_rules_v1":
+                            "Propostas proporcionais; revise todas as vistas.",
+                        "contour_rules_v2":
+                            "Máscaras seguem contorno e priors de bonecos; revise limites entre peças.",
+                        "grounded_sam2_v1":
+                            "Segmentação Grounding DINO + SAM 2; revise baixa confiança e oclusões.",
+                    }
+                    warning = warnings.get(
+                        segmenter.model_id,
+                        "Segmentação automática; revise limites e identidade das peças.",
                     )
                     return SegmentationResult(observations=items, warnings=[warning])
                 artifact = self.node(run, Stage.SEGMENTATION, str(view.view_id),
