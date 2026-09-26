@@ -380,25 +380,65 @@ class Engine:
             ]
 
             def match_views():
-                if run.config.matching_adapter == "semantic_side_matching_v1":
-                    return self.match(run, observations)
-                if self.matcher is None or self.matcher.model_id != run.config.matching_adapter:
-                    raise InvalidInput(
-                        f"Matcher '{run.config.matching_adapter}' não está configurado."
-                    )
-                return self.matcher.match(MatchingRequest(
-                    project_id=run.project_id,
-                    observations=observations,
-                    views=run.views,
-                    image_png_by_view={
-                        view.view_id: self.store.read(view.normalized_artifact_id)
-                        for view in run.views
-                    },
-                    mask_png_by_observation={
-                        observation.observation_id: self.store.read(observation.mask_artifact_id)
-                        for observation in observations
-                    },
-                ))
+                initial_parameters = {"max_distance": .42}
+
+                def generate_matching(parameters):
+                    if run.config.matching_adapter == "semantic_side_matching_v1":
+                        return self.match(run, observations)
+                    if self.matcher is None or self.matcher.model_id != run.config.matching_adapter:
+                        raise InvalidInput(
+                            f"Matcher '{run.config.matching_adapter}' não está configurado."
+                        )
+                    return self.matcher.match(MatchingRequest(
+                        project_id=run.project_id,
+                        observations=observations,
+                        views=run.views,
+                        image_png_by_view={
+                            view.view_id: self.store.read(view.normalized_artifact_id)
+                            for view in run.views
+                        },
+                        mask_png_by_observation={
+                            observation.observation_id: self.store.read(
+                                observation.mask_artifact_id
+                            )
+                            for observation in observations
+                        },
+                        parameters=parameters,
+                    ))
+
+                if not run.config.quality_loop_enabled:
+                    return generate_matching(initial_parameters)
+
+                specialist = (
+                    run.config.matching_adapter
+                    if run.config.matching_adapter == "semantic_side_matching_v1"
+                    else self.matcher.model_id
+                )
+                value, trace = run_quality_loop(
+                    stage=Stage.MATCHING,
+                    scope="all",
+                    specialist=specialist,
+                    initial_parameters=initial_parameters,
+                    max_attempts=(
+                        1 if run.config.matching_adapter == "semantic_side_matching_v1"
+                        else run.config.quality_max_attempts
+                    ),
+                    generate=generate_matching,
+                    evaluate=lambda result: matching_limit(
+                        result,
+                        confidence_threshold=run.config.matching_confidence_limit,
+                        coverage_threshold=run.config.matching_coverage_limit,
+                    ),
+                    tune=tune_matching,
+                )
+                self.record_quality_trace(
+                    run,
+                    Stage.MATCHING,
+                    "all",
+                    matching_inputs,
+                    trace,
+                )
+                return value
 
             matching_version = (
                 self.matcher.model_version
