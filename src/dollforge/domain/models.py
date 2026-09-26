@@ -361,6 +361,7 @@ class StageResult(DTO):
     quality_attempts: int = Field(default=0, ge=0)
     quality_score: Score | None = None
     quality_trace_artifact_id: UUID | None = None
+    training_signal_artifact_id: UUID | None = None
     error: str | None = None
 
 
