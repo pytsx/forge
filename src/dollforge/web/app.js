@@ -161,7 +161,10 @@ function paintPoint(event){
 }
 async function submitReview(artifact,actionName,extra={}){
   await api(`/runs/${state.run.run_id}/reviews`,{method:'POST',body:JSON.stringify({artifact_id:artifact,action:actionName,reviewer:'Revisor local',reason_code:actionName==='approve'?'review_passed':'human_correction',...extra})});
-  await selectRun(await api('/runs/'+state.run.run_id));toast('Revisão salva. A versão anterior foi preservada.');
+  await selectRun(await api('/runs/'+state.run.run_id));
+  toast(actionName==='remask'
+    ?'Correção salva. Vistas automáticas equivalentes foram recalculadas e continuam pendentes de revisão.'
+    :'Revisão salva. A versão anterior foi preservada.');
 }
 function renderMatches(selectedId){
   $('#approve-matches').disabled=!state.matches;
