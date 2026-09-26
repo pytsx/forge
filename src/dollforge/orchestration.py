@@ -20,6 +20,8 @@ from dollforge.contracts import (
     MatchingRequest,
     MatchingResult,
     MeshCandidate,
+    PerceptionAdapter,
+    PerceptionRequest,
     MeshRecord,
     ReconstructionAdapter,
     ReconstructionResult,
@@ -67,6 +69,7 @@ class Engine:
                  reconstructor: ReconstructionAdapter, blender: BlenderAdapter,
                  segmenters: dict[str, SegmentationAdapter] | None = None,
                  matcher: MatchingAdapter | None = None,
+                 perception: PerceptionAdapter | None = None,
                  reconstructors: dict[str, ReconstructionAdapter] | None = None):
         self.store = store
         self.segmenter = segmenter
@@ -75,6 +78,7 @@ class Engine:
         self.reconstructors = {reconstructor.model_id: reconstructor, **(reconstructors or {})}
         self.blender = blender
         self.matcher = matcher
+        self.perception = perception
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -84,6 +88,14 @@ class Engine:
                 f"Segmentador '{adapter_id}' não configurado. Disponíveis: {available}"
             )
         return adapter
+
+    def perception_adapter(self, adapter_id: str) -> PerceptionAdapter:
+        if self.perception is None or self.perception.model_id != adapter_id:
+            available = self.perception.model_id if self.perception is not None else "none"
+            raise InvalidInput(
+                f"Perception adapter '{adapter_id}' não configurado. Disponível: {available}"
+            )
+        return self.perception
 
     def reconstruction_adapter(self, adapter_id: str) -> ReconstructionAdapter:
         adapter = self.reconstructors.get(adapter_id)
@@ -251,6 +263,43 @@ class Engine:
             graph_art = self.node(run, Stage.GRAPH, "all", [matches.artifact_id, scale.artifact_id],
                 lambda: self.graph(run, matched, scale_value), replay=replay)
             graph = DollGraph.model_validate(self.store.json(graph_art.artifact_id))
+
+            perception_adapter = self.perception_adapter(run.config.perception_adapter)
+            perception_inputs = [
+                graph_art.artifact_id,
+                matches.artifact_id,
+                *segments,
+                *[view.normalized_artifact_id for view in run.views],
+                *[observation.mask_artifact_id for observation in observations],
+            ]
+
+            def describe_scene():
+                return perception_adapter.describe(PerceptionRequest(
+                    project_id=run.project_id,
+                    graph_artifact_id=graph_art.artifact_id,
+                    graph=graph,
+                    observations=observations,
+                    views=run.views,
+                    image_png_by_view={
+                        view.view_id: self.store.read(view.normalized_artifact_id)
+                        for view in run.views
+                    },
+                    mask_png_by_observation={
+                        observation.observation_id: self.store.read(observation.mask_artifact_id)
+                        for observation in observations
+                    },
+                    style_family=run.project_snapshot.style_family,
+                ))
+
+            self.node(
+                run,
+                Stage.PERCEPTION,
+                "all",
+                perception_inputs,
+                describe_scene,
+                perception_adapter.model_version,
+                replay=replay,
+            )
             reconstructor = self.reconstruction_adapter(run.config.reconstruction_adapter)
 
             def reconstruct():
