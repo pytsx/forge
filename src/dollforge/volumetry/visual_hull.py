@@ -267,6 +267,7 @@ class CalibratedVisualHullSDF:
             source_views: list[str] = []
             used_cameras = []
             masks_by_view: dict[UUID, np.ndarray] = {}
+            hard_by_view: dict[UUID, bool] = {}
 
             for observation in source:
                 camera = cameras[observation.view_id]
@@ -280,6 +281,7 @@ class CalibratedVisualHullSDF:
                 source_views.append(str(camera.label))
                 used_cameras.append(camera)
                 masks_by_view[camera.view_id] = mask
+                hard_by_view[camera.view_id] = hard
 
             if total_weight <= 0:
                 continue
@@ -334,6 +336,7 @@ class CalibratedVisualHullSDF:
                     camera,
                     reference,
                     voxel_size,
+                    hard_constraint=hard_by_view.get(camera.view_id, False),
                 ))
             mean_iou = (
                 float(np.mean([metric.silhouette_iou for metric in reprojection_metrics]))
