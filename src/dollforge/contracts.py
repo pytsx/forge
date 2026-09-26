@@ -65,6 +65,46 @@ class PerceptionRequest(DTO):
     style_family: str | None = None
 
 
+class VolumeSlice(DTO):
+    z_norm: Score
+    center_x_norm: float
+    half_width_norm: float = Field(ge=0)
+    center_y_norm: float
+    half_depth_norm: float = Field(ge=0)
+    confidence: Score
+
+
+class VolumeCandidate(DTO):
+    part_instance_id: UUID
+    name: str
+    source_views: list[str]
+    extents_xyz: tuple[float, float, float]
+    center_xyz: tuple[float, float, float]
+    slices: list[VolumeSlice] = Field(min_length=4)
+    vertices: list[tuple[float, float, float]]
+    faces: list[tuple[int, int, int]]
+    confidence: Score
+    concavity_support: bool = False
+    provenance: Provenance
+
+
+class VolumetryRequest(DTO):
+    project_id: UUID
+    graph: DollGraph
+    perception: PerceptionGraph
+    observations: list[PartObservation]
+    views: list[ImageView]
+    mask_png_by_observation: dict[UUID, bytes]
+    resolution: int = Field(ge=16, le=64)
+
+
+class VolumetryResult(DTO):
+    volumes: list[VolumeCandidate]
+    unit: str
+    method: str
+    warnings: list[str] = Field(default_factory=list)
+
+
 class MeshCandidate(DTO):
     part_instance_id: UUID
     name: str
@@ -133,12 +173,20 @@ class PerceptionAdapter(Protocol):
     def describe(self, request: PerceptionRequest) -> PerceptionGraph: ...
 
 
+class VolumetryAdapter(Protocol):
+    model_id: str
+    model_version: str
+
+    def build(self, request: VolumetryRequest) -> VolumetryResult: ...
+
+
 class ReconstructionAdapter(Protocol):
     model_id: str
     model_version: str
 
     def reconstruct(self, graph: DollGraph, observations: list[PartObservation],
-                    views: list[ImageView]) -> list[MeshCandidate]: ...
+                    views: list[ImageView],
+                    volumetry: VolumetryResult | None = None) -> list[MeshCandidate]: ...
 
 
 class BlenderAdapter(Protocol):
