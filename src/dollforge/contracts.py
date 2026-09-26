@@ -31,6 +31,7 @@ class SegmentationRequest(DTO):
     image_png: bytes
     threshold: int
     seed: int
+    parameters: dict[str, float | int | bool] = Field(default_factory=dict)
 
 
 class SegmentationResult(DTO):
@@ -44,6 +45,7 @@ class MatchingRequest(DTO):
     views: list[ImageView]
     image_png_by_view: dict[UUID, bytes]
     mask_png_by_observation: dict[UUID, bytes]
+    parameters: dict[str, float | int | bool] = Field(default_factory=dict)
 
 
 class MatchingResult(DTO):
@@ -80,7 +82,12 @@ class ReprojectionMetric(DTO):
     view_label: ViewLabel
     silhouette_iou: Score
     area_error_ratio: float
+    outside_area_ratio: float = Field(ge=0)
+    max_overshoot_px: float = Field(ge=0)
+    max_overshoot_mm: float | None = Field(default=None, ge=0)
     boundary_rmse_px: float | None = Field(default=None, ge=0)
+    hard_constraint: bool = False
+    hard_boundary_compliant: bool = True
 
 
 class VolumeFieldDescriptor(DTO):
@@ -119,6 +126,7 @@ class VolumetryRequest(DTO):
     cameras: list[CameraEstimate] = Field(default_factory=list)
     mask_png_by_observation: dict[UUID, bytes]
     resolution: int = Field(ge=32, le=128)
+    parameters: dict[str, float | int | bool] = Field(default_factory=dict)
 
 
 class VolumetryResult(DTO):

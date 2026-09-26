@@ -231,6 +231,12 @@ class CalibratedVisualHullSDF:
         volumes: list[VolumeCandidate] = []
         fields: list[VolumeFieldPayload] = []
         warnings: list[str] = []
+        resolution = int(request.parameters.get("resolution", request.resolution))
+        resolution = max(32, min(128, resolution))
+        support_threshold = float(
+            request.parameters.get("soft_support_threshold", .80)
+        )
+        support_threshold = max(.50, min(.98, support_threshold))
 
         for instance in request.graph.parts:
             perception = perceived.get(instance.part_instance_id)
@@ -253,7 +259,7 @@ class CalibratedVisualHullSDF:
                 perception,
                 request.graph.scale.canonical_height,
             )
-            points, origin, voxel_size = _grid(center, nominal_extents, request.resolution)
+            points, origin, voxel_size = _grid(center, nominal_extents, resolution)
 
             weighted_inside = np.zeros(len(points), dtype=np.float64)
             total_weight = 0.0
@@ -261,6 +267,7 @@ class CalibratedVisualHullSDF:
             source_views: list[str] = []
             used_cameras = []
             masks_by_view: dict[UUID, np.ndarray] = {}
+            hard_by_view: dict[UUID, bool] = {}
 
             for observation in source:
                 camera = cameras[observation.view_id]
@@ -274,14 +281,15 @@ class CalibratedVisualHullSDF:
                 source_views.append(str(camera.label))
                 used_cameras.append(camera)
                 masks_by_view[camera.view_id] = mask
+                hard_by_view[camera.view_id] = hard
 
             if total_weight <= 0:
                 continue
             support = weighted_inside / total_weight
-            occupancy_flat = hard_inside & (support >= .80)
+            occupancy_flat = hard_inside & (support >= support_threshold)
             if not occupancy_flat.any():
                 # Automatic masks can disagree. Relax only non-human evidence; human edits remain hard.
-                occupancy_flat = hard_inside & (support >= .65)
+                occupancy_flat = hard_inside & (support >= max(.55, support_threshold - .15))
                 warnings.append(
                     f"{instance.part_class}:{instance.side} precisou de carving relaxado por conflito "
                     "entre máscaras automáticas."
@@ -293,7 +301,7 @@ class CalibratedVisualHullSDF:
                 continue
 
             occupancy = occupancy_flat.reshape(
-                (request.resolution, request.resolution, request.resolution)
+                (resolution, resolution, resolution)
             )
             sdf = signed_distance_field(occupancy, voxel_size)
             try:
@@ -328,6 +336,7 @@ class CalibratedVisualHullSDF:
                     camera,
                     reference,
                     voxel_size,
+                    hard_constraint=hard_by_view.get(camera.view_id, False),
                 ))
             mean_iou = (
                 float(np.mean([metric.silhouette_iou for metric in reprojection_metrics]))

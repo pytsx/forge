@@ -48,8 +48,18 @@ from dollforge.domain.models import (
     StageResult,
     utcnow,
 )
-from dollforge.errors import DomainError, InvalidInput
+from dollforge.errors import DomainError, InvalidInput, QualityLimitExceeded
 from dollforge.perception.models import PerceptionGraph
+from dollforge.quality.loop import run_quality_loop
+from dollforge.quality.models import LimitTrace, TrainingSignal
+from dollforge.quality.policies import (
+    matching_limit,
+    segmentation_limit,
+    tune_matching,
+    tune_segmentation,
+    tune_volumetry,
+    volumetry_limit,
+)
 from dollforge.storage import Store, canonical, digest
 from dollforge.volumetry.calibration import calibrate_views
 
@@ -91,6 +101,92 @@ class Engine:
             {volumetry.model_id: volumetry, **(volumetries or {})}
             if volumetry is not None else dict(volumetries or {})
         )
+
+    def record_quality_trace(
+        self,
+        run: RunManifest,
+        stage: Stage,
+        scope: str,
+        inputs: list[UUID],
+        trace: LimitTrace,
+    ) -> Artifact:
+        trace_artifact = self.put(
+            run,
+            stage,
+            f"quality_limit:{scope}",
+            trace,
+            inputs,
+            provenance=Provenance(
+                type="derived_geometry",
+                source="imperative_quality_limit_v1",
+                evidence=inputs,
+                note=(
+                    "Prova quantitativa executada após geração. A etapa só pode avançar "
+                    "quando o limite configurado é atingido."
+                ),
+            ),
+            version="1.0.0",
+        )
+        node_id = f"{stage}:{scope}"
+        node = next((item for item in reversed(run.stages) if item.node_id == node_id), None)
+        if node is not None:
+            node.quality_status = trace.status
+            node.quality_attempts = len(trace.attempts)
+            node.quality_score = trace.best_score
+            node.quality_trace_artifact_id = trace_artifact.artifact_id
+
+        if trace.status == "retrain_candidate":
+            best = next(
+                attempt for attempt in trace.attempts
+                if attempt.attempt == trace.best_attempt
+            )
+            failed = [
+                metric.code
+                for metric in best.evaluation.metrics
+                if not metric.passed
+            ]
+            if run.config.retrain_on_limit_exhaustion:
+                signal = TrainingSignal(
+                    stage=stage,
+                    scope=scope,
+                    specialist=trace.specialist,
+                    input_artifact_ids=inputs,
+                    trace_artifact_id=trace_artifact.artifact_id,
+                    best_attempt=trace.best_attempt,
+                    best_score=trace.best_score,
+                    best_parameters=best.parameters,
+                    failed_metrics=failed,
+                )
+                training_artifact = self.put(
+                    run,
+                    Stage.KNOWLEDGE,
+                    f"retrain_candidate:{stage}:{scope}",
+                    signal,
+                    [trace_artifact.artifact_id, *inputs],
+                    provenance=Provenance(
+                        type="model_inferred",
+                        source="quality_limit_retrain_trigger_v1",
+                        evidence=[trace_artifact.artifact_id],
+                        note=(
+                            "Falha persistente após autoajuste. Este caso é candidato a "
+                            "retreino offline; pesos não são alterados durante o run."
+                        ),
+                    ),
+                )
+                if node is not None:
+                    node.training_signal_artifact_id = training_artifact.artifact_id
+        return trace_artifact
+
+    def enforce_quality_limit(self, run: RunManifest, stage: Stage, scope: str) -> None:
+        node_id = f"{stage}:{scope}"
+        node = next((item for item in reversed(run.stages) if item.node_id == node_id), None)
+        if node is None:
+            raise QualityLimitExceeded(f"Prova de qualidade ausente para {node_id}.")
+        if node.quality_status == "retrain_candidate" and run.config.quality_fail_closed:
+            raise QualityLimitExceeded(
+                f"{node_id} não atingiu o limite após {node.quality_attempts} tentativas. "
+                "O melhor resultado foi preservado para revisão e o caso foi marcado para retreino."
+            )
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -151,9 +247,18 @@ class Engine:
                              input_artifact_ids=inputs, cache_key=key)
         run.stages.append(result)
         self.store.save("run", run.run_id, run)
-        cached = self.store.cached(key) if run.config.cache else None
-        # Replay freezes reviewed input revisions rather than consulting today's review pointer.
-        if replay and stage in (Stage.SEGMENTATION, Stage.MATCHING, Stage.GRAPH):
+        quality_gated = (
+            run.config.quality_loop_enabled
+            and stage in (Stage.SEGMENTATION, Stage.MATCHING, Stage.VOLUMETRY)
+        )
+        cached = self.store.cached(key) if run.config.cache and not quality_gated else None
+        # Quality-gated stages rerun their proof even during replay; deterministic inputs
+        # should reproduce the same accepted attempt while preserving an explicit trace.
+        if (
+            replay
+            and not quality_gated
+            and stage in (Stage.SEGMENTATION, Stage.MATCHING, Stage.GRAPH)
+        ):
             old = next((s for s in replay.stages if s.node_id == node_id and not s.invalidated), None)
             if old and old.output_artifact_id:
                 cached = self.store.metadata(old.output_artifact_id)
@@ -172,7 +277,10 @@ class Engine:
                      node_id=node_id, cached=result.cached)
             return artifact
         except Exception as exc:
-            result.status = JobStatus.FAILED
+            result.status = (
+                JobStatus.REVIEW if isinstance(exc, QualityLimitExceeded)
+                else JobStatus.FAILED
+            )
             result.error = str(exc) if isinstance(exc, DomainError) else type(exc).__name__
             log.exception("stage_failed", run_id=str(run.run_id), stage=stage)
             raise
@@ -198,12 +306,63 @@ class Engine:
             segmenter = self.segmentation_adapter(run.config.segmentation_adapter)
             for view in run.views:
                 def segment(view=view):
-                    request = SegmentationRequest(view=view,
-                        image_png=self.store.read(view.normalized_artifact_id),
-                        threshold=run.config.foreground_threshold, seed=run.config.seed)
-                    proposals = segmenter.predict(request)
+                    image_png = self.store.read(view.normalized_artifact_id)
+                    initial_parameters = {
+                        "foreground_threshold": run.config.foreground_threshold,
+                        "edge_threshold": .62,
+                        "color_tolerance": .46,
+                        "box_threshold": .28,
+                        "text_threshold": .22,
+                    }
+
+                    def generate_segmentation(parameters):
+                        request = SegmentationRequest(
+                            view=view,
+                            image_png=image_png,
+                            threshold=int(parameters.get(
+                                "foreground_threshold",
+                                run.config.foreground_threshold,
+                            )),
+                            seed=run.config.seed + int(
+                                parameters.get("attempt_seed_offset", 0)
+                            ),
+                            parameters=parameters,
+                        )
+                        return segmenter.predict(request)
+
+                    if run.config.quality_loop_enabled:
+                        proposals, trace = run_quality_loop(
+                            stage=Stage.SEGMENTATION,
+                            scope=str(view.view_id),
+                            specialist=segmenter.model_id,
+                            initial_parameters=initial_parameters,
+                            max_attempts=run.config.quality_max_attempts,
+                            generate=generate_segmentation,
+                            evaluate=lambda proposals: segmentation_limit(
+                                scope=str(view.view_id),
+                                view_label=view.label,
+                                image_png=image_png,
+                                proposals=proposals,
+                                boundary_threshold=run.config.segmentation_boundary_limit,
+                                confidence_threshold=run.config.segmentation_confidence_limit,
+                                coverage_threshold=run.config.segmentation_coverage_limit,
+                            ),
+                            tune=tune_segmentation,
+                        )
+                        self.record_quality_trace(
+                            run,
+                            Stage.SEGMENTATION,
+                            str(view.view_id),
+                            [view.normalized_artifact_id],
+                            trace,
+                        )
+                    else:
+                        proposals = generate_segmentation(initial_parameters)
+
                     if not proposals:
-                        raise InvalidInput(f"Silhueta não encontrada em {view.label}. Use fundo uniforme.")
+                        raise InvalidInput(
+                            f"Silhueta não encontrada em {view.label}. Use fundo uniforme."
+                        )
                     items = []
                     for proposal in proposals:
                         mask = self.put(run, Stage.SEGMENTATION, f"mask:{view.view_id}",
@@ -231,6 +390,7 @@ class Engine:
                     return SegmentationResult(observations=items, warnings=[warning])
                 artifact = self.node(run, Stage.SEGMENTATION, str(view.view_id),
                     [view.normalized_artifact_id], segment, segmenter.model_version, replay)
+                self.enforce_quality_limit(run, Stage.SEGMENTATION, str(view.view_id))
                 segments.append(artifact.artifact_id)
                 observations.extend(SegmentationResult.model_validate(
                     self.store.json(artifact.artifact_id)).observations)
@@ -241,25 +401,65 @@ class Engine:
             ]
 
             def match_views():
-                if run.config.matching_adapter == "semantic_side_matching_v1":
-                    return self.match(run, observations)
-                if self.matcher is None or self.matcher.model_id != run.config.matching_adapter:
-                    raise InvalidInput(
-                        f"Matcher '{run.config.matching_adapter}' não está configurado."
-                    )
-                return self.matcher.match(MatchingRequest(
-                    project_id=run.project_id,
-                    observations=observations,
-                    views=run.views,
-                    image_png_by_view={
-                        view.view_id: self.store.read(view.normalized_artifact_id)
-                        for view in run.views
-                    },
-                    mask_png_by_observation={
-                        observation.observation_id: self.store.read(observation.mask_artifact_id)
-                        for observation in observations
-                    },
-                ))
+                initial_parameters = {"max_distance": .42}
+
+                def generate_matching(parameters):
+                    if run.config.matching_adapter == "semantic_side_matching_v1":
+                        return self.match(run, observations)
+                    if self.matcher is None or self.matcher.model_id != run.config.matching_adapter:
+                        raise InvalidInput(
+                            f"Matcher '{run.config.matching_adapter}' não está configurado."
+                        )
+                    return self.matcher.match(MatchingRequest(
+                        project_id=run.project_id,
+                        observations=observations,
+                        views=run.views,
+                        image_png_by_view={
+                            view.view_id: self.store.read(view.normalized_artifact_id)
+                            for view in run.views
+                        },
+                        mask_png_by_observation={
+                            observation.observation_id: self.store.read(
+                                observation.mask_artifact_id
+                            )
+                            for observation in observations
+                        },
+                        parameters=parameters,
+                    ))
+
+                if not run.config.quality_loop_enabled:
+                    return generate_matching(initial_parameters)
+
+                specialist = (
+                    run.config.matching_adapter
+                    if run.config.matching_adapter == "semantic_side_matching_v1"
+                    else self.matcher.model_id
+                )
+                value, trace = run_quality_loop(
+                    stage=Stage.MATCHING,
+                    scope="all",
+                    specialist=specialist,
+                    initial_parameters=initial_parameters,
+                    max_attempts=(
+                        1 if run.config.matching_adapter == "semantic_side_matching_v1"
+                        else run.config.quality_max_attempts
+                    ),
+                    generate=generate_matching,
+                    evaluate=lambda result: matching_limit(
+                        result,
+                        confidence_threshold=run.config.matching_confidence_limit,
+                        coverage_threshold=run.config.matching_coverage_limit,
+                    ),
+                    tune=tune_matching,
+                )
+                self.record_quality_trace(
+                    run,
+                    Stage.MATCHING,
+                    "all",
+                    matching_inputs,
+                    trace,
+                )
+                return value
 
             matching_version = (
                 self.matcher.model_version
@@ -270,6 +470,7 @@ class Engine:
                 run, Stage.MATCHING, "all", matching_inputs, match_views, matching_version,
                 replay=replay,
             )
+            self.enforce_quality_limit(run, Stage.MATCHING, "all")
             matched = MatchingResult.model_validate(self.store.json(matches.artifact_id))
             scale = self.node(run, Stage.SCALE, "all", [camera.artifact_id], lambda: ScaleEstimate(
                 mode="absolute" if run.project_snapshot.known_height_mm else "relative",
@@ -350,39 +551,78 @@ class Engine:
             ]
 
             def build_volume():
-                request = VolumetryRequest(
-                    project_id=run.project_id,
-                    graph=graph,
-                    perception=perception_value,
-                    observations=observations,
-                    views=run.views,
-                    cameras=calibrated_cameras.cameras,
-                    mask_png_by_observation={
-                        observation.observation_id: self.store.read(observation.mask_artifact_id)
-                        for observation in observations
-                    },
-                    resolution=run.config.volumetry_resolution,
-                )
-                if hasattr(volumetry_adapter, "build_with_fields"):
-                    result, fields = volumetry_adapter.build_with_fields(request)
-                    by_part = {volume.part_instance_id: volume for volume in result.volumes}
-                    for field in fields:
-                        volume = by_part.get(field.part_instance_id)
-                        if volume is None or volume.field is None:
-                            continue
-                        artifact = self.put(
-                            run,
-                            Stage.VOLUMETRY,
-                            f"volume_field:{field.part_instance_id}.npz",
-                            field.payload,
-                            volumetry_inputs,
-                            media_type="application/x-npz",
-                            provenance=volume.provenance,
-                            version=volumetry_adapter.model_version,
-                        )
-                        volume.field.artifact_id = artifact.artifact_id
-                    return result
-                return volumetry_adapter.build(request)
+                masks = {
+                    observation.observation_id: self.store.read(observation.mask_artifact_id)
+                    for observation in observations
+                }
+                initial_parameters = {
+                    "resolution": run.config.volumetry_resolution,
+                    "soft_support_threshold": .80,
+                }
+
+                def generate_volume(parameters):
+                    request = VolumetryRequest(
+                        project_id=run.project_id,
+                        graph=graph,
+                        perception=perception_value,
+                        observations=observations,
+                        views=run.views,
+                        cameras=calibrated_cameras.cameras,
+                        mask_png_by_observation=masks,
+                        resolution=int(parameters.get(
+                            "resolution",
+                            run.config.volumetry_resolution,
+                        )),
+                        parameters=parameters,
+                    )
+                    if hasattr(volumetry_adapter, "build_with_fields"):
+                        return volumetry_adapter.build_with_fields(request)
+                    return volumetry_adapter.build(request), []
+
+                if run.config.quality_loop_enabled:
+                    candidate, trace = run_quality_loop(
+                        stage=Stage.VOLUMETRY,
+                        scope="all",
+                        specialist=volumetry_adapter.model_id,
+                        initial_parameters=initial_parameters,
+                        max_attempts=run.config.quality_max_attempts,
+                        generate=generate_volume,
+                        evaluate=lambda candidate: volumetry_limit(
+                            candidate[0],
+                            iou_threshold=run.config.volumetry_iou_limit,
+                            outside_area_threshold=run.config.volumetry_outside_area_limit,
+                            overshoot_px_threshold=run.config.volumetry_overshoot_px_limit,
+                        ),
+                        tune=tune_volumetry,
+                    )
+                    self.record_quality_trace(
+                        run,
+                        Stage.VOLUMETRY,
+                        "all",
+                        volumetry_inputs,
+                        trace,
+                    )
+                else:
+                    candidate = generate_volume(initial_parameters)
+
+                result, fields = candidate
+                by_part = {volume.part_instance_id: volume for volume in result.volumes}
+                for field in fields:
+                    volume = by_part.get(field.part_instance_id)
+                    if volume is None or volume.field is None:
+                        continue
+                    artifact = self.put(
+                        run,
+                        Stage.VOLUMETRY,
+                        f"volume_field:{field.part_instance_id}.npz",
+                        field.payload,
+                        volumetry_inputs,
+                        media_type="application/x-npz",
+                        provenance=volume.provenance,
+                        version=volumetry_adapter.model_version,
+                    )
+                    volume.field.artifact_id = artifact.artifact_id
+                return result
 
             volumetry_art = self.node(
                 run,
@@ -393,6 +633,7 @@ class Engine:
                 volumetry_adapter.model_version,
                 replay=replay,
             )
+            self.enforce_quality_limit(run, Stage.VOLUMETRY, "all")
             volumetry_value = VolumetryResult.model_validate(
                 self.store.json(volumetry_art.artifact_id)
             )
@@ -459,6 +700,10 @@ class Engine:
                 self.node(run, Stage.BLENDER, "all", [reconstruction.artifact_id], build,
                           self.blender.model_version, replay)
             run.status = JobStatus.REVIEW
+        except QualityLimitExceeded as exc:
+            run.status = JobStatus.REVIEW
+            run.error = str(exc)
+            log.warning("run_quality_limit_exhausted", run_id=str(run.run_id), error=str(exc))
         except Exception as exc:
             run.status = JobStatus.FAILED
             run.error = str(exc) if isinstance(exc, DomainError) else f"Falha interna: {type(exc).__name__}"
@@ -551,6 +796,17 @@ class Engine:
                         message=(
                             f"Fidelidade de silhueta {metric.view_label}: "
                             f"{metric.silhouette_iou:.1%}"
+                        ),
+                    ))
+                    checks.append(Check(
+                        code=f"outside_boundary_{metric.view_label}",
+                        status="pass" if metric.hard_boundary_compliant else "fail",
+                        part_instance_id=volume.part_instance_id,
+                        measurement=metric.outside_area_ratio,
+                        message=(
+                            f"Outside area {metric.view_label}: "
+                            f"{metric.outside_area_ratio:.2%}; "
+                            f"overshoot máx. {metric.max_overshoot_px:.2f}px"
                         ),
                     ))
                 if volume.reprojection_metrics:

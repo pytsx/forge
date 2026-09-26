@@ -64,6 +64,8 @@ def evaluate_reprojection(
     camera: CameraEstimate,
     reference_mask: np.ndarray,
     voxel_size: float,
+    *,
+    hard_constraint: bool = False,
 ) -> ReprojectionMetric:
     reference = np.asarray(reference_mask, dtype=bool)
     generated = reproject_occupancy(
@@ -75,10 +77,29 @@ def evaluate_reprojection(
     iou = silhouette_iou(generated, reference)
     reference_area = max(1, int(reference.sum()))
     area_error = abs(int(generated.sum()) - int(reference.sum())) / reference_area
+    outside = generated & ~reference
+    outside_area = float(outside.sum() / reference_area)
+    if outside.any():
+        distance_to_reference = distance_transform_edt(~reference)
+        max_overshoot_px = float(distance_to_reference[outside].max())
+    else:
+        max_overshoot_px = 0.0
+    max_overshoot_mm = (
+        max_overshoot_px * camera.mm_per_pixel
+        if camera.mm_per_pixel is not None else None
+    )
+    tolerance_px = 2.0
     return ReprojectionMetric(
         view_id=camera.view_id,
-        view_label=str(camera.label),
+        view_label=camera.label,
         silhouette_iou=float(np.clip(iou, 0.0, 1.0)),
         area_error_ratio=float(area_error),
+        outside_area_ratio=outside_area,
+        max_overshoot_px=max_overshoot_px,
+        max_overshoot_mm=max_overshoot_mm,
         boundary_rmse_px=boundary_rmse(generated, reference),
+        hard_constraint=hard_constraint,
+        hard_boundary_compliant=(
+            outside_area <= .02 and max_overshoot_px <= tolerance_px
+        ),
     )

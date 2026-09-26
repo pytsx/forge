@@ -80,7 +80,8 @@ async function pollRun(){
   await selectRun(run);
   if(!['queued','running'].includes(run.status)){
     state.runs=await api(`/projects/${state.project.project_id}/runs`);
-    toast(run.status==='failed'?run.error:'Peças geradas. Seu projeto está pronto para revisão.',run.status==='failed');
+    const message=run.error||'Peças geradas. Seu projeto está pronto para revisão.';
+    toast(message,run.status==='failed'||!!run.error);
     render();
   }
 }
@@ -124,7 +125,20 @@ function render(){
 }
 function renderPipeline(){
   if(!state.run){$('#pipeline-content').innerHTML='Importe as quatro vistas para iniciar.';return;}
-  $('#pipeline-content').innerHTML=state.run.stages.map(s=>`<div class="pipeline-row"><span class="stage-number">${s.stage}</span><div>${stageNames[s.stage]||s.stage}<p>${s.stage==='S05'?esc(labels[state.run.views.find(v=>s.node_id.includes(v.view_id))?.label]||''):''} ${s.cached?'Reutilizado do cache · ':''}${s.output_artifact_id?.slice(0,8)||'Processando'}</p>${s.error?`<p>${esc(s.error)}</p>`:''}</div><span class="status ${s.invalidated?'warn':s.status==='failed'?'failed':''}">${s.invalidated?'↻ Reprocessar':states[s.status]}</span>${s.output_artifact_id?`<a href="${artifactUrl(s.output_artifact_id)}" target="_blank" rel="noopener">Ver contrato ↗</a>`:''}</div>`).join('')||'Execução na fila…';
+  $('#pipeline-content').innerHTML=state.run.stages.map(s=>{
+    const quality=s.quality_status==='passed'
+      ?`<span class="quality-proof pass">LIMITE ✓ · ${Math.round((s.quality_score||0)*100)}% · ${s.quality_attempts} tentativa(s)</span>`
+      :s.quality_status==='retrain_candidate'
+        ?`<span class="quality-proof failed">LIMITE ✕ · RETREINO CANDIDATO · ${s.quality_attempts} tentativa(s)</span>`
+        :'';
+    const trace=s.quality_trace_artifact_id
+      ?`<a href="${artifactUrl(s.quality_trace_artifact_id)}" target="_blank" rel="noopener">Prova do limite ↗</a>`
+      :'';
+    const retrain=s.training_signal_artifact_id
+      ?`<a href="${artifactUrl(s.training_signal_artifact_id)}" target="_blank" rel="noopener">Sinal de retreino ↗</a>`
+      :'';
+    return `<div class="pipeline-row"><span class="stage-number">${s.stage}</span><div>${stageNames[s.stage]||s.stage}<p>${s.stage==='S05'?esc(labels[state.run.views.find(v=>s.node_id.includes(v.view_id))?.label]||''):''} ${s.cached?'Reutilizado do cache · ':''}${s.output_artifact_id?.slice(0,8)||'Processando'}</p>${quality}${s.error?`<p>${esc(s.error)}</p>`:''}</div><span class="status ${s.invalidated?'warn':s.status==='failed'?'failed':''}">${s.invalidated?'↻ Reprocessar':states[s.status]}</span><div class="pipeline-links">${s.output_artifact_id?`<a href="${artifactUrl(s.output_artifact_id)}" target="_blank" rel="noopener">Contrato ↗</a>`:''}${trace}${retrain}</div></div>`;
+  }).join('')||'Execução na fila…';
 }
 function renderObservations(){
   const segment=currentSegment();
@@ -318,7 +332,7 @@ function renderVolumetry(){
   }).join('');
   const cards=result.volumes.map(v=>{
     const ext=v.extents_xyz||[0,0,0], field=v.field||{}, metrics=v.reprojection_metrics||[];
-    const metricRows=metrics.map(m=>`<div class="reprojection-row"><span>${esc(labels[m.view_label]||m.view_label)}</span><strong class="${m.silhouette_iou>=.9?'good':'warn'}">${(m.silhouette_iou*100).toFixed(1)}%</strong><small>erro área ${(m.area_error_ratio*100).toFixed(1)}%</small></div>`).join('');
+    const metricRows=metrics.map(m=>`<div class="reprojection-row boundary-${m.hard_constraint?'hard':'soft'}"><span>${esc(labels[m.view_label]||m.view_label)} ${m.hard_constraint?'🔒':''}</span><strong class="${m.hard_boundary_compliant&&m.silhouette_iou>=.95?'good':'warn'}">IoU ${(m.silhouette_iou*100).toFixed(1)}%</strong><small>fora ${(m.outside_area_ratio*100).toFixed(2)}% · overshoot ${Number(m.max_overshoot_px||0).toFixed(2)}px</small></div>`).join('');
     const grid=field.grid_shape?field.grid_shape.join(' × '):'—';
     const voxel=field.voxel_size_mm!=null?`${Number(field.voxel_size_mm).toFixed(3)} mm`:`${Number(field.voxel_size_world||0).toFixed(5)} ${esc(field.unit||result.unit)}`;
     return `<article class="volume-card calibrated"><div class="volume-card-head"><strong>${esc(v.name)}</strong><span>IoU ${((v.mean_reprojection_iou||0)*100).toFixed(1)}%</span></div><dl><div><dt>Dimensões</dt><dd>${ext.map(x=>Number(x).toFixed(3)).join(' × ')}</dd></div><div><dt>Grid</dt><dd>${esc(grid)}</dd></div><div><dt>Voxel</dt><dd>${esc(voxel)}</dd></div><div><dt>Representação</dt><dd>${field.representation?'Visual Hull + SDF':'Visual Hull v1'}</dd></div><div><dt>Concavidades</dt><dd>${v.concavity_support?'suportadas':'não suportadas'}</dd></div></dl><h4>Reprojeção</h4><div class="reprojection-list">${metricRows||'<p class="muted">Sem métricas nesta versão.</p>'}</div></article>`;

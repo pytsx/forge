@@ -65,7 +65,10 @@ class ContourDollSegmenter:
     def predict(self, request: SegmentationRequest) -> list[MaskProposal]:
         image = Image.open(BytesIO(request.image_png)).convert("RGB")
         rgb = np.asarray(image)
-        foreground = foreground_mask(request.image_png, request.threshold)
+        foreground_threshold = int(
+            request.parameters.get("foreground_threshold", request.threshold)
+        )
+        foreground = foreground_mask(request.image_png, foreground_threshold)
         edges = sobel_edge_map(rgb)
         object_bounds = _bounds(foreground)
         if not object_bounds:
@@ -109,8 +112,8 @@ class ContourDollSegmenter:
                 allowed,
                 seed,
                 edges=edges,
-                edge_threshold=.62,
-                color_tolerance=.46,
+                edge_threshold=float(request.parameters.get("edge_threshold", .62)),
+                color_tolerance=float(request.parameters.get("color_tolerance", .46)),
             )
             # Fine texture can over-fragment a flood. The curved prior remains a safe fallback.
             if region.sum() < max(12, allowed.sum() * .24):

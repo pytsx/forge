@@ -16,3 +16,8 @@ class InvalidInput(DomainError):
 
 class DependencyUnavailable(DomainError):
     pass
+
+
+class QualityLimitExceeded(DomainError):
+    """A stage exhausted bounded self-correction without reaching its acceptance limit."""
+
