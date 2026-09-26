@@ -30,9 +30,13 @@ def sobel_edge_map(rgb: np.ndarray) -> np.ndarray:
         + padded[2:, :-2] + 2 * padded[2:, 1:-1] + padded[2:, 2:]
     )
     magnitude = np.sqrt(gx * gx + gy * gy)
-    scale = float(np.percentile(magnitude, 98.0))
-    if scale <= 1e-6:
+    nonzero = magnitude[magnitude > 1e-6]
+    if len(nonzero) == 0:
         return np.zeros_like(magnitude, dtype=np.float32)
+    # Sparse, clean silhouettes may have <2% edge pixels. Measuring the percentile
+    # only over non-zero gradients keeps those real boundaries from collapsing to zero.
+    scale = float(np.percentile(nonzero, 95.0))
+    scale = max(scale, float(nonzero.max()) * .10, 1e-6)
     return np.clip(magnitude / scale, 0.0, 1.0).astype(np.float32)
 
 
