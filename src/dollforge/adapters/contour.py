@@ -7,7 +7,7 @@ from PIL import Image, ImageFilter
 
 from dollforge.adapters.baseline import png
 from dollforge.contracts import MaskProposal, SegmentationRequest
-from dollforge.domain.models import PartObservation, Provenance, Side
+from dollforge.domain.models import PartObservation, Provenance
 from dollforge.vision.edges import boundary_adherence, edge_guided_region, sobel_edge_map
 
 
