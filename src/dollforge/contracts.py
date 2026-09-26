@@ -13,7 +13,6 @@ from dollforge.domain.models import (
     Provenance,
     Score,
 )
-
 from dollforge.perception.models import PerceptionGraph
 
 
