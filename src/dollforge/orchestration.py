@@ -789,6 +789,17 @@ class Engine:
                             f"{metric.silhouette_iou:.1%}"
                         ),
                     ))
+                    checks.append(Check(
+                        code=f"outside_boundary_{metric.view_label}",
+                        status="pass" if metric.hard_boundary_compliant else "fail",
+                        part_instance_id=volume.part_instance_id,
+                        measurement=metric.outside_area_ratio,
+                        message=(
+                            f"Outside area {metric.view_label}: "
+                            f"{metric.outside_area_ratio:.2%}; "
+                            f"overshoot máx. {metric.max_overshoot_px:.2f}px"
+                        ),
+                    ))
                 if volume.reprojection_metrics:
                     checks.append(Check(
                         code="multiview_consistency",
