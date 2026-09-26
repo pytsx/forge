@@ -64,6 +64,8 @@ def evaluate_reprojection(
     camera: CameraEstimate,
     reference_mask: np.ndarray,
     voxel_size: float,
+    *,
+    hard_constraint: bool = False,
 ) -> ReprojectionMetric:
     reference = np.asarray(reference_mask, dtype=bool)
     generated = reproject_occupancy(
@@ -96,5 +98,8 @@ def evaluate_reprojection(
         max_overshoot_px=max_overshoot_px,
         max_overshoot_mm=max_overshoot_mm,
         boundary_rmse_px=boundary_rmse(generated, reference),
-        hard_boundary_compliant=outside_area <= .02 and max_overshoot_px <= tolerance_px,
+        hard_constraint=hard_constraint,
+        hard_boundary_compliant=(
+            outside_area <= .02 and max_overshoot_px <= tolerance_px
+        ),
     )
