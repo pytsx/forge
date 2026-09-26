@@ -303,7 +303,7 @@ class Artifact(DTO):
 
 class PipelineConfig(DTO):
     seed: int = 42
-    segmentation_adapter: Literal["silhouette_rules_v1"] = "silhouette_rules_v1"
+    segmentation_adapter: Literal["silhouette_rules_v1", "grounded_sam2_v1"] = "silhouette_rules_v1"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
     reconstruction_adapter: Literal["ellipsoid_multiview_v1"] = "ellipsoid_multiview_v1"
     foreground_threshold: int = Field(default=32, ge=1, le=254)
