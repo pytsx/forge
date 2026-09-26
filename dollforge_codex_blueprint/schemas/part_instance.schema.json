@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "part_instance.schema.json",
+  "title": "PartInstance",
+  "type": "object",
+  "required": [
+    "part_instance_id",
+    "class",
+    "side",
+    "observation_ids",
+    "confidence"
+  ],
+  "properties": {
+    "part_instance_id": {
+      "type": "string"
+    },
+    "class": {
+      "type": "string"
+    },
+    "side": {
+      "enum": [
+        "left",
+        "right",
+        "center",
+        "bilateral",
+        "unknown"
+      ]
+    },
+    "observation_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "symmetry_partner_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "canonical_transform": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "number"
+      },
+      "minItems": 16,
+      "maxItems": 16
+    },
+    "review_state": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

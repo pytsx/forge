@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "feedback_event.schema.json",
+  "title": "FeedbackEvent",
+  "type": "object",
+  "required": [
+    "event_id",
+    "project_id",
+    "run_id",
+    "stage",
+    "target",
+    "action",
+    "created_at"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "approve",
+        "reject",
+        "relabel",
+        "remask",
+        "rematch",
+        "split",
+        "merge",
+        "reposition",
+        "rescale",
+        "replace_reference",
+        "change_joint",
+        "change_connector",
+        "edit_parameter",
+        "request_regeneration",
+        "accept_with_warning"
+      ]
+    },
+    "dimension": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "score": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "reason_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "comment": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "parameter_overrides": {
+      "type": "object"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": true
+}

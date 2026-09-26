@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.dollforge/
+data/
+dist/
+build/
+*.blend1
+*.log
+.env

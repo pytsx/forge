@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "joint_spec.schema.json",
+  "title": "JointSpec",
+  "type": "object",
+  "required": [
+    "joint_id",
+    "parent_part_id",
+    "child_part_id",
+    "joint_type",
+    "confidence",
+    "provenance"
+  ],
+  "properties": {
+    "joint_id": {
+      "type": "string"
+    },
+    "parent_part_id": {
+      "type": "string"
+    },
+    "child_part_id": {
+      "type": "string"
+    },
+    "joint_type": {
+      "enum": [
+        "fixed",
+        "peg_socket",
+        "ball_socket",
+        "hinge",
+        "swivel",
+        "double_joint",
+        "snap_fit",
+        "friction_fit",
+        "magnetic",
+        "custom"
+      ]
+    },
+    "axis_xyz": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "range_deg": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "review_state": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

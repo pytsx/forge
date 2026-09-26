@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "proj_example",
+  "root_part_id": "pelvis_01",
+  "parts": [
+    {
+      "part_instance_id": "head_01",
+      "class": "head",
+      "side": "center"
+    },
+    {
+      "part_instance_id": "torso_01",
+      "class": "torso",
+      "side": "center"
+    },
+    {
+      "part_instance_id": "pelvis_01",
+      "class": "pelvis",
+      "side": "center"
+    },
+    {
+      "part_instance_id": "upper_arm_L_01",
+      "class": "upper_arm",
+      "side": "left"
+    },
+    {
+      "part_instance_id": "upper_arm_R_01",
+      "class": "upper_arm",
+      "side": "right"
+    }
+  ],
+  "joints": [
+    {
+      "joint_id": "neck_01",
+      "parent_part_id": "torso_01",
+      "child_part_id": "head_01",
+      "joint_type": "ball_socket"
+    },
+    {
+      "joint_id": "shoulder_L_01",
+      "parent_part_id": "torso_01",
+      "child_part_id": "upper_arm_L_01",
+      "joint_type": "ball_socket"
+    },
+    {
+      "joint_id": "shoulder_R_01",
+      "parent_part_id": "torso_01",
+      "child_part_id": "upper_arm_R_01",
+      "joint_type": "ball_socket"
+    }
+  ]
+}

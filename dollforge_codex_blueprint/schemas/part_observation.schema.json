@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "part_observation.schema.json",
+  "title": "PartObservation",
+  "type": "object",
+  "required": [
+    "observation_id",
+    "view_id",
+    "class",
+    "side",
+    "confidence",
+    "mask_artifact_id",
+    "provenance"
+  ],
+  "properties": {
+    "observation_id": {
+      "type": "string"
+    },
+    "view_id": {
+      "type": "string"
+    },
+    "class": {
+      "type": "string"
+    },
+    "side": {
+      "enum": [
+        "left",
+        "right",
+        "center",
+        "bilateral",
+        "unknown"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "bbox_xyxy": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "number"
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "mask_artifact_id": {
+      "type": "string"
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "review_state": {
+      "enum": [
+        "unreviewed",
+        "needs_review",
+        "approved",
+        "rejected",
+        "corrected"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

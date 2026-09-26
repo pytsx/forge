@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "doll_project.schema.json",
+  "title": "DollProject",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project_id",
+    "name",
+    "unit",
+    "coordinate_system",
+    "views"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "style_family": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "unit": {
+      "const": "mm"
+    },
+    "coordinate_system": {
+      "const": "RH_Z_UP"
+    },
+    "known_height_mm": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0
+    },
+    "manufacturing_profile_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "views": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

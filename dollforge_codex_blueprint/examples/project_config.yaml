@@ -1,0 +1,42 @@
+schema_version: "1.0.0"
+project:
+  name: "example_doll"
+  style_family: "pipo_v1"
+  unit: "mm"
+  coordinate_system: "RH_Z_UP"
+  known_height_mm: null
+
+inputs:
+  required_views:
+    - front
+    - left
+    - right
+    - back
+  optional_views:
+    - three_quarter_front
+    - three_quarter_back
+    - detail_head
+    - detail_joint
+
+pipeline:
+  segmentation:
+    adapter: "sam2_grounded"
+    auto_approve_threshold: 0.97
+  correspondence:
+    adapter: "multisignal_v1"
+    review_threshold: 0.85
+  reconstruction:
+    generic_adapter: "hunyuan3d_mv"
+    specialist_overrides:
+      head: "head_specialist_v1"
+      hand: "hand_specialist_v1"
+  joints:
+    always_review_hidden_connectors: true
+
+manufacturing:
+  profile: "resin_prototype_v1"
+
+learning:
+  knowledge_index_on_approval: true
+  auto_train: false
+  gold_requires_human_approval: true

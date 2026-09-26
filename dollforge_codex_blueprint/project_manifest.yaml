@@ -1,0 +1,31 @@
+project: DollForge
+blueprint_version: "1.0.0"
+language: "python"
+domain: "multi-view doll reconstruction and manufacturing"
+canonical_unit: "mm"
+canonical_coordinate_system: "RH_Z_UP"
+architecture: "modular specialist pipeline"
+human_in_the_loop: true
+online_weight_updates: false
+artifact_immutability: true
+provenance_required: true
+
+primary_outputs:
+  - doll_graph
+  - part_meshes
+  - joint_specs
+  - connector_meshes
+  - assembly
+  - blend_file
+  - manufacturing_report
+  - feedback_events
+
+recommended_initial_stack:
+  api: FastAPI
+  schemas: Pydantic
+  db: PostgreSQL
+  vector: pgvector_or_faiss
+  orchestration: Prefect_or_Dagster
+  experiment_tracking: MLflow
+  geometry: [trimesh, open3d, pycolmap]
+  dcc: Blender
