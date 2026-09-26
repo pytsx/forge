@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -17,8 +16,16 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from dollforge.bootstrap import create_service
 from dollforge.domain.models import (
-    DTO, CreateProject, DollProject, FeedbackEvent, ImageView, JobStatus,
-    PipelineConfig, ReviewRequest, RunManifest, ViewLabel,
+    DTO,
+    CreateProject,
+    DollProject,
+    FeedbackEvent,
+    ImageView,
+    JobStatus,
+    PipelineConfig,
+    ReviewRequest,
+    RunManifest,
+    ViewLabel,
 )
 from dollforge.errors import Conflict, DomainError, InvalidInput, NotFound
 from dollforge.service import MAX_UPLOAD, Service
