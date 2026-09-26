@@ -286,12 +286,63 @@ class Engine:
             segmenter = self.segmentation_adapter(run.config.segmentation_adapter)
             for view in run.views:
                 def segment(view=view):
-                    request = SegmentationRequest(view=view,
-                        image_png=self.store.read(view.normalized_artifact_id),
-                        threshold=run.config.foreground_threshold, seed=run.config.seed)
-                    proposals = segmenter.predict(request)
+                    image_png = self.store.read(view.normalized_artifact_id)
+                    initial_parameters = {
+                        "foreground_threshold": run.config.foreground_threshold,
+                        "edge_threshold": .62,
+                        "color_tolerance": .46,
+                        "box_threshold": .28,
+                        "text_threshold": .22,
+                    }
+
+                    def generate_segmentation(parameters):
+                        request = SegmentationRequest(
+                            view=view,
+                            image_png=image_png,
+                            threshold=int(parameters.get(
+                                "foreground_threshold",
+                                run.config.foreground_threshold,
+                            )),
+                            seed=run.config.seed + int(
+                                parameters.get("attempt_seed_offset", 0)
+                            ),
+                            parameters=parameters,
+                        )
+                        return segmenter.predict(request)
+
+                    if run.config.quality_loop_enabled:
+                        proposals, trace = run_quality_loop(
+                            stage=Stage.SEGMENTATION,
+                            scope=str(view.view_id),
+                            specialist=segmenter.model_id,
+                            initial_parameters=initial_parameters,
+                            max_attempts=run.config.quality_max_attempts,
+                            generate=generate_segmentation,
+                            evaluate=lambda proposals: segmentation_limit(
+                                scope=str(view.view_id),
+                                view_label=view.label,
+                                image_png=image_png,
+                                proposals=proposals,
+                                boundary_threshold=run.config.segmentation_boundary_limit,
+                                confidence_threshold=run.config.segmentation_confidence_limit,
+                                coverage_threshold=run.config.segmentation_coverage_limit,
+                            ),
+                            tune=tune_segmentation,
+                        )
+                        self.record_quality_trace(
+                            run,
+                            Stage.SEGMENTATION,
+                            str(view.view_id),
+                            [view.normalized_artifact_id],
+                            trace,
+                        )
+                    else:
+                        proposals = generate_segmentation(initial_parameters)
+
                     if not proposals:
-                        raise InvalidInput(f"Silhueta não encontrada em {view.label}. Use fundo uniforme.")
+                        raise InvalidInput(
+                            f"Silhueta não encontrada em {view.label}. Use fundo uniforme."
+                        )
                     items = []
                     for proposal in proposals:
                         mask = self.put(run, Stage.SEGMENTATION, f"mask:{view.view_id}",
