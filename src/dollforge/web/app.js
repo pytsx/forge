@@ -9,7 +9,9 @@ const states = {queued:'Na fila',running:'Em execução',succeeded:'Concluído',
 const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S08:'DollGraph',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
 const colors = ['#c6e397','#85b9bc','#d8ae7d','#c394ad','#859dd1','#b6c37a','#d1917e','#7db598','#a9a2cc'];
 const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
-let pollTimer, toastTimer, uploadLabel, baseImage, maskLayer=document.createElement('canvas'), undo=[], paint=false, lastPoint=null;
+let pollTimer, toastTimer, uploadLabel, baseImage, baseImageData, edgeData,
+  maskLayer=document.createElement('canvas'), undo=[], paint=false, lastPoint=null,
+  showEdges=false, lassoPoints=[], lassoPath=[];
 
 async function api(path, options={}) {
   const headers = options.body && !(options.body instanceof FormData) ? {'Content-Type':'application/json'} : {};
@@ -140,24 +142,125 @@ async function loadMask(){
   const [image,mask]=await Promise.all([imageLoad(artifactUrl(view.normalized_artifact_id)),imageLoad(artifactUrl(o.mask_artifact_id))]);
   if(state.selected!==selected)return;
   baseImage=image;canvas.width=image.width;canvas.height=image.height;
+  const source=document.createElement('canvas');source.width=image.width;source.height=image.height;
+  const sourceContext=source.getContext('2d',{willReadFrequently:true});sourceContext.drawImage(image,0,0);
+  baseImageData=sourceContext.getImageData(0,0,image.width,image.height);
+  edgeData=DFSeg.edgeMap(baseImageData);
   maskLayer.width=image.width;maskLayer.height=image.height;
-  maskLayer.getContext('2d').drawImage(mask,0,0);
-  undo=[];state.dirty=false;$('#save-mask').disabled=true;
+  maskLayer.getContext('2d',{willReadFrequently:true}).drawImage(mask,0,0);
+  undo=[];state.dirty=false;showEdges=false;$('#toggle-edges').classList.remove('active');
+  $('.canvas-wrap').classList.remove('edge-mode');resetLasso();$('#save-mask').disabled=true;
   $('#mask-info').textContent=`${image.width} × ${image.height} · ${partName(o)} · ${Math.round(o.confidence*100)}% de confiança`;
   paintMask();
 }
 function paintMask(){
   if(!baseImage)return;
-  const canvas=$('#mask-canvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(baseImage,0,0);
-  const pixels=maskLayer.getContext('2d').getImageData(0,0,maskLayer.width,maskLayer.height);
+  const canvas=$('#mask-canvas'),ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(baseImage,0,0);
+  if(showEdges&&edgeData){
+    const edgeImage=ctx.createImageData(canvas.width,canvas.height);
+    for(let i=0;i<edgeData.length;i++){
+      const value=edgeData[i],p=i*4;
+      edgeImage.data[p]=105;edgeImage.data[p+1]=225;edgeImage.data[p+2]=194;
+      edgeImage.data[p+3]=Math.round(value*.58);
+    }
+    const edgeCanvas=document.createElement('canvas');edgeCanvas.width=canvas.width;edgeCanvas.height=canvas.height;
+    edgeCanvas.getContext('2d').putImageData(edgeImage,0,0);ctx.drawImage(edgeCanvas,0,0);
+  }
+  const pixels=maskLayer.getContext('2d',{willReadFrequently:true}).getImageData(0,0,maskLayer.width,maskLayer.height);
   for(let i=0;i<pixels.data.length;i+=4){const visible=pixels.data[i]>127;pixels.data[i]=183;pixels.data[i+1]=226;pixels.data[i+2]=133;pixels.data[i+3]=visible?110:0;}
   const overlay=document.createElement('canvas');overlay.width=canvas.width;overlay.height=canvas.height;overlay.getContext('2d').putImageData(pixels,0,0);ctx.drawImage(overlay,0,0);
+  if(lassoPath.length){
+    ctx.save();ctx.strokeStyle='#d9f3b6';ctx.lineWidth=Math.max(1,canvas.width/500);ctx.setLineDash([6,4]);
+    ctx.beginPath();ctx.moveTo(lassoPath[0][0],lassoPath[0][1]);
+    for(const point of lassoPath.slice(1))ctx.lineTo(point[0],point[1]);
+    ctx.stroke();ctx.setLineDash([]);
+    for(const point of lassoPoints){ctx.beginPath();ctx.arc(point[0],point[1],Math.max(3,canvas.width/250),0,Math.PI*2);ctx.fillStyle='#c5e995';ctx.fill();}
+    ctx.restore();
+  }
 }
 function position(event,canvas){const box=canvas.getBoundingClientRect();return [(event.clientX-box.left)*canvas.width/box.width,(event.clientY-box.top)*canvas.height/box.height];}
+function pushUndo(){
+  if(!maskLayer.width||!maskLayer.height)return;
+  undo.push(maskLayer.getContext('2d',{willReadFrequently:true}).getImageData(0,0,maskLayer.width,maskLayer.height));
+  if(undo.length>12)undo.shift();
+}
+function markMaskDirty(){state.dirty=true;$('#save-mask').disabled=false;}
+function currentBinaryMask(){
+  const data=maskLayer.getContext('2d',{willReadFrequently:true}).getImageData(0,0,maskLayer.width,maskLayer.height).data;
+  const binary=new Uint8Array(maskLayer.width*maskLayer.height);
+  for(let i=0;i<binary.length;i++)binary[i]=data[i*4]>127?1:0;
+  return binary;
+}
+function applyBinaryMask(binary,mode='replace'){
+  const ctx=maskLayer.getContext('2d',{willReadFrequently:true});
+  const image=ctx.getImageData(0,0,maskLayer.width,maskLayer.height);
+  for(let i=0;i<binary.length;i++){
+    const current=image.data[i*4]>127,selected=!!binary[i];
+    const value=mode==='add'?(current||selected):mode==='subtract'?(current&&!selected):selected;
+    const p=i*4,v=value?255:0;image.data[p]=v;image.data[p+1]=v;image.data[p+2]=v;image.data[p+3]=255;
+  }
+  ctx.putImageData(image,0,0);markMaskDirty();paintMask();
+}
+function resetLasso(){lassoPoints=[];lassoPath=[];updateLassoButtons();paintMask();}
+function updateLassoButtons(){
+  const finish=$('#finish-lasso'),cancel=$('#cancel-lasso');
+  if(finish)finish.disabled=lassoPoints.length<3;if(cancel)cancel.disabled=lassoPoints.length===0;
+}
+function toolCursor(){
+  const canvas=$('#mask-canvas');
+  canvas.style.cursor=state.tool==='inspect'?'default':state.tool==='lasso'?'cell':'crosshair';
+}
+function smartSelect(event,kind){
+  if(!baseImageData||!edgeData)return;
+  const point=position(event,$('#mask-canvas'));
+  const tolerance=Number($('#region-tolerance').value)+(kind==='wand'?-10:0);
+  const sensitivity=Math.min(95,Number($('#edge-sensitivity').value)+(kind==='wand'?16:0));
+  pushUndo();
+  const region=DFSeg.smartRegion(baseImageData,edgeData,point[0],point[1],{
+    tolerance:Math.max(8,tolerance),edgeSensitivity:sensitivity,adaptive:kind!=='wand'
+  });
+  applyBinaryMask(region,event.altKey?'subtract':'add');
+}
+function maskOperation(operation){
+  if(!baseImageData||!edgeData)return;
+  pushUndo();let mask=currentBinaryMask();
+  if(operation==='refine'){
+    const radius=Math.max(4,Math.round(Number($('#edge-sensitivity').value)/5));
+    mask=DFSeg.refineToEdges(mask,edgeData,maskLayer.width,maskLayer.height,radius);
+  }else if(operation==='fill'){
+    mask=DFSeg.fillHoles(mask,maskLayer.width,maskLayer.height);
+  }else{
+    mask=DFSeg.morph(mask,maskLayer.width,maskLayer.height,operation,1);
+  }
+  applyBinaryMask(mask,'replace');
+}
+function addLassoPoint(event){
+  if(!edgeData)return;
+  const point=position(event,$('#mask-canvas')).map(Math.round);
+  if(lassoPoints.length){
+    const previous=lassoPoints[lassoPoints.length-1];
+    const segment=DFSeg.magneticPath(edgeData,maskLayer.width,maskLayer.height,previous,point,
+      Math.max(8,Math.round(Number($('#edge-sensitivity').value)/3)));
+    lassoPath.push(...segment.slice(1));
+  }else lassoPath=[point];
+  lassoPoints.push(point);updateLassoButtons();paintMask();
+}
+function finishLasso(){
+  if(lassoPoints.length<3)return;
+  const first=lassoPoints[0],last=lassoPoints[lassoPoints.length-1];
+  const close=DFSeg.magneticPath(edgeData,maskLayer.width,maskLayer.height,last,first,
+    Math.max(8,Math.round(Number($('#edge-sensitivity').value)/3)));
+  const polygon=[...lassoPath,...close.slice(1)];
+  pushUndo();
+  const ctx=maskLayer.getContext('2d');ctx.fillStyle='white';ctx.beginPath();ctx.moveTo(polygon[0][0],polygon[0][1]);
+  for(const point of polygon.slice(1))ctx.lineTo(point[0],point[1]);ctx.closePath();ctx.fill();
+  lassoPoints=[];lassoPath=[];updateLassoButtons();markMaskDirty();paintMask();
+}
 function paintPoint(event){
   const point=position(event,$('#mask-canvas')),ctx=maskLayer.getContext('2d');
   ctx.strokeStyle=ctx.fillStyle=state.tool==='erase'?'black':'white';ctx.lineWidth=Number($('#brush-size').value)*maskLayer.width/600;ctx.lineCap='round';ctx.lineJoin='round';
-  ctx.beginPath();ctx.moveTo(...(lastPoint||point));ctx.lineTo(point[0]+.01,point[1]+.01);ctx.stroke();lastPoint=point;state.dirty=true;$('#save-mask').disabled=false;paintMask();
+  ctx.beginPath();ctx.moveTo(...(lastPoint||point));ctx.lineTo(point[0]+.01,point[1]+.01);ctx.stroke();lastPoint=point;markMaskDirty();paintMask();
 }
 async function submitReview(artifact,actionName,extra={}){
   await api(`/runs/${state.run.run_id}/reviews`,{method:'POST',body:JSON.stringify({artifact_id:artifact,action:actionName,reviewer:'Revisor local',reason_code:actionName==='approve'?'review_passed':'human_correction',...extra})});
