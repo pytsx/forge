@@ -48,8 +48,18 @@ from dollforge.domain.models import (
     StageResult,
     utcnow,
 )
-from dollforge.errors import DomainError, InvalidInput
+from dollforge.errors import DomainError, InvalidInput, QualityLimitExceeded
 from dollforge.perception.models import PerceptionGraph
+from dollforge.quality.loop import run_quality_loop
+from dollforge.quality.models import LimitTrace, TrainingSignal
+from dollforge.quality.policies import (
+    matching_limit,
+    segmentation_limit,
+    tune_matching,
+    tune_segmentation,
+    tune_volumetry,
+    volumetry_limit,
+)
 from dollforge.storage import Store, canonical, digest
 from dollforge.volumetry.calibration import calibrate_views
 
@@ -91,6 +101,84 @@ class Engine:
             {volumetry.model_id: volumetry, **(volumetries or {})}
             if volumetry is not None else dict(volumetries or {})
         )
+
+    def record_quality_trace(
+        self,
+        run: RunManifest,
+        stage: Stage,
+        scope: str,
+        inputs: list[UUID],
+        trace: LimitTrace,
+    ) -> Artifact:
+        trace_artifact = self.put(
+            run,
+            stage,
+            f"quality_limit:{scope}",
+            trace,
+            inputs,
+            provenance=Provenance(
+                type="derived_geometry",
+                source="imperative_quality_limit_v1",
+                evidence=inputs,
+                note=(
+                    "Prova quantitativa executada após geração. A etapa só pode avançar "
+                    "quando o limite configurado é atingido."
+                ),
+            ),
+            version="1.0.0",
+        )
+        node_id = f"{stage}:{scope}"
+        node = next((item for item in reversed(run.stages) if item.node_id == node_id), None)
+        if node is not None:
+            node.quality_status = trace.status
+            node.quality_attempts = len(trace.attempts)
+            node.quality_score = trace.best_score
+            node.quality_trace_artifact_id = trace_artifact.artifact_id
+
+        if trace.status == "retrain_candidate":
+            best = next(
+                attempt for attempt in trace.attempts
+                if attempt.attempt == trace.best_attempt
+            )
+            failed = [
+                metric.code
+                for metric in best.evaluation.metrics
+                if not metric.passed
+            ]
+            if run.config.retrain_on_limit_exhaustion:
+                signal = TrainingSignal(
+                    stage=stage,
+                    scope=scope,
+                    specialist=trace.specialist,
+                    input_artifact_ids=inputs,
+                    trace_artifact_id=trace_artifact.artifact_id,
+                    best_attempt=trace.best_attempt,
+                    best_score=trace.best_score,
+                    best_parameters=best.parameters,
+                    failed_metrics=failed,
+                )
+                self.put(
+                    run,
+                    Stage.KNOWLEDGE,
+                    f"retrain_candidate:{stage}:{scope}",
+                    signal,
+                    [trace_artifact.artifact_id, *inputs],
+                    provenance=Provenance(
+                        type="model_inferred",
+                        source="quality_limit_retrain_trigger_v1",
+                        evidence=[trace_artifact.artifact_id],
+                        note=(
+                            "Falha persistente após autoajuste. Este caso é candidato a "
+                            "retreino offline; pesos não são alterados durante o run."
+                        ),
+                    ),
+                )
+            if run.config.quality_fail_closed:
+                raise QualityLimitExceeded(
+                    f"{stage}:{scope} não atingiu o limite após "
+                    f"{len(trace.attempts)} tentativas. Caso marcado para revisão/retreino."
+                )
+        return trace_artifact
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
