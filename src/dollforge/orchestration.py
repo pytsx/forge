@@ -189,7 +189,7 @@ class Engine:
             raw = [v.normalized_artifact_id for v in run.views]
             camera = self.node(run, Stage.CAMERA, "all", raw, lambda: CameraResult(cameras=[
                 CameraEstimate(view_id=v.view_id, label=v.label,
-                    yaw_deg={"front": 0, "left": 90, "back": 180, "right": -90}.get(v.label, 0),
+                    yaw_deg={"front": 0, "right": 90, "back": 180, "left": -90}.get(v.label, 0),
                     provenance=Provenance(type="rule_based", source="view_label_yaw_v1",
                         evidence=[v.normalized_artifact_id], note="Câmera não calibrada."))
                 for v in run.views]), replay=replay)
