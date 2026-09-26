@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
 import os
+from io import BytesIO
 
 import numpy as np
 from PIL import Image
@@ -10,7 +10,6 @@ from dollforge.adapters.baseline import png
 from dollforge.contracts import MaskProposal, SegmentationRequest
 from dollforge.domain.models import PartClass, Provenance, Side
 from dollforge.errors import DependencyUnavailable, InvalidInput
-
 
 PROMPT_LABELS: dict[str, tuple[PartClass, Side]] = {
     "head": (PartClass.HEAD, Side.CENTER),
