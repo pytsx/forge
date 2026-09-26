@@ -5,7 +5,7 @@ from math import pi
 import numpy as np
 import trimesh
 
-from dollforge.contracts import MeshCandidate
+from dollforge.contracts import MeshCandidate, VolumetryResult
 from dollforge.domain.models import (
     DollGraph,
     ImageView,
@@ -98,7 +98,8 @@ class DollTemplateReconstructor:
     model_version = "2.0.0"
 
     def reconstruct(self, graph: DollGraph, observations: list[PartObservation],
-                    views: list[ImageView]) -> list[MeshCandidate]:
+                    views: list[ImageView],
+                    volumetry: VolumetryResult | None = None) -> list[MeshCandidate]:
         by_id = {o.observation_id: o for o in observations}
         view_map = {v.view_id: v for v in views}
         bounds = {}
