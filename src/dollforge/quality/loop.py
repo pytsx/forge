@@ -4,11 +4,9 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import TypeVar
 
-from pydantic import BaseModel
-
 from dollforge.quality.models import LimitAttempt, LimitEvaluation, LimitTrace
 
-T = TypeVar("T", bound=BaseModel)
+T = TypeVar("T")
 
 
 def run_quality_loop(
