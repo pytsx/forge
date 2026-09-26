@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from pydantic import Field
@@ -12,6 +12,7 @@ from dollforge.domain.models import (
     PartObservation,
     Provenance,
     Score,
+    ViewLabel,
 )
 from dollforge.perception.models import PerceptionGraph
 
@@ -76,7 +77,7 @@ class VolumeSlice(DTO):
 
 class ReprojectionMetric(DTO):
     view_id: UUID
-    view_label: str
+    view_label: ViewLabel
     silhouette_iou: Score
     area_error_ratio: float
     boundary_rmse_px: float | None = Field(default=None, ge=0)
@@ -84,11 +85,11 @@ class ReprojectionMetric(DTO):
 
 class VolumeFieldDescriptor(DTO):
     artifact_id: UUID | None = None
-    representation: str = "occupancy_sdf"
+    representation: Literal["occupancy_sdf"] = "occupancy_sdf"
     grid_shape: tuple[int, int, int]
     voxel_size_world: float = Field(gt=0)
     voxel_size_mm: float | None = Field(default=None, gt=0)
-    unit: str
+    unit: Literal["relative", "mm"]
     origin_xyz: tuple[float, float, float]
 
 
