@@ -52,7 +52,7 @@ def reproject_occupancy(
     generated[v[valid], u[valid]] = True
 
     scale = camera.world_units_per_pixel or voxel_size
-    radius = max(0, int(np.ceil(voxel_size / max(scale, 1e-12) * .55)))
+    radius = max(0, int(np.ceil(voxel_size / max(scale, 1e-12) * .35)))
     if radius:
         structure = np.ones((2 * radius + 1, 2 * radius + 1), dtype=bool)
         generated = binary_dilation(generated, structure=structure)
