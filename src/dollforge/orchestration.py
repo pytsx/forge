@@ -11,9 +11,9 @@ import trimesh
 from pydantic import BaseModel
 
 from dollforge.contracts import (
-    BlenderAdapter, BlenderResult, CameraResult, Check, ManufacturingReport, MatchingResult,
-    MeshCandidate, MeshRecord, ReconstructionAdapter, ReconstructionResult, SegmentationAdapter,
-    SegmentationRequest, SegmentationResult,
+    BlenderAdapter, BlenderResult, CameraResult, Check, ManufacturingReport, MatchingAdapter,
+    MatchingRequest, MatchingResult, MeshCandidate, MeshRecord, ReconstructionAdapter,
+    ReconstructionResult, SegmentationAdapter, SegmentationRequest, SegmentationResult,
 )
 from dollforge.domain.models import (
     Artifact, CameraEstimate, DollGraph, JobStatus, JointSpec, Lineage, PartInstance,
@@ -41,12 +41,14 @@ def lineage(inputs: list[UUID], version: str = "1.0.0", seed: int = 42,
 class Engine:
     def __init__(self, store: Store, segmenter: SegmentationAdapter,
                  reconstructor: ReconstructionAdapter, blender: BlenderAdapter,
-                 segmenters: dict[str, SegmentationAdapter] | None = None):
+                 segmenters: dict[str, SegmentationAdapter] | None = None,
+                 matcher: MatchingAdapter | None = None):
         self.store = store
         self.segmenter = segmenter
         self.segmenters = {segmenter.model_id: segmenter, **(segmenters or {})}
         self.reconstructor = reconstructor
         self.blender = blender
+        self.matcher = matcher
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -157,8 +159,42 @@ class Engine:
                 segments.append(artifact.artifact_id)
                 observations.extend(SegmentationResult.model_validate(
                     self.store.json(artifact.artifact_id)).observations)
-            matches = self.node(run, Stage.MATCHING, "all", segments,
-                lambda: self.match(run, observations), replay=replay)
+            matching_inputs = [
+                *segments,
+                *[view.normalized_artifact_id for view in run.views],
+                *[observation.mask_artifact_id for observation in observations],
+            ]
+
+            def match_views():
+                if run.config.matching_adapter == "semantic_side_matching_v1":
+                    return self.match(run, observations)
+                if self.matcher is None or self.matcher.model_id != run.config.matching_adapter:
+                    raise InvalidInput(
+                        f"Matcher '{run.config.matching_adapter}' não está configurado."
+                    )
+                return self.matcher.match(MatchingRequest(
+                    project_id=run.project_id,
+                    observations=observations,
+                    views=run.views,
+                    image_png_by_view={
+                        view.view_id: self.store.read(view.normalized_artifact_id)
+                        for view in run.views
+                    },
+                    mask_png_by_observation={
+                        observation.observation_id: self.store.read(observation.mask_artifact_id)
+                        for observation in observations
+                    },
+                ))
+
+            matching_version = (
+                self.matcher.model_version
+                if self.matcher and run.config.matching_adapter == self.matcher.model_id
+                else "1.0.0"
+            )
+            matches = self.node(
+                run, Stage.MATCHING, "all", matching_inputs, match_views, matching_version,
+                replay=replay,
+            )
             matched = MatchingResult.model_validate(self.store.json(matches.artifact_id))
             scale = self.node(run, Stage.SCALE, "all", [camera.artifact_id], lambda: ScaleEstimate(
                 mode="absolute" if run.project_snapshot.known_height_mm else "relative",

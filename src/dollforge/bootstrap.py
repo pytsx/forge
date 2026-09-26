@@ -7,6 +7,7 @@ import structlog
 from dollforge.adapters.baseline import EllipsoidReconstructor, SilhouetteSegmenter
 from dollforge.adapters.blender import HeadlessBlender
 from dollforge.adapters.grounded_sam2 import GroundedSam2Segmenter
+from dollforge.adapters.matching import MultiSignalMatcher
 from dollforge.orchestration import Engine
 from dollforge.service import Service
 from dollforge.storage import Store
@@ -28,4 +29,5 @@ def create_service(root: Path | None = None) -> Service:
         EllipsoidReconstructor(),
         HeadlessBlender(),
         segmenters=segmenters,
+        matcher=MultiSignalMatcher(),
     ))
