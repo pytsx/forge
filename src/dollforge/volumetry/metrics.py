@@ -4,7 +4,7 @@ import numpy as np
 from scipy.ndimage import binary_dilation, binary_erosion, distance_transform_edt
 
 from dollforge.contracts import ReprojectionMetric
-from dollforge.domain.models import CameraEstimate, ViewLabel
+from dollforge.domain.models import CameraEstimate
 from dollforge.volumetry.projection import project_world_points
 
 
