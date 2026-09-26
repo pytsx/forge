@@ -11,13 +11,37 @@ import trimesh
 from pydantic import BaseModel
 
 from dollforge.contracts import (
-    BlenderAdapter, BlenderResult, CameraResult, Check, ManufacturingReport, MatchingAdapter,
-    MatchingRequest, MatchingResult, MeshCandidate, MeshRecord, ReconstructionAdapter,
-    ReconstructionResult, SegmentationAdapter, SegmentationRequest, SegmentationResult,
+    BlenderAdapter,
+    BlenderResult,
+    CameraResult,
+    Check,
+    ManufacturingReport,
+    MatchingAdapter,
+    MatchingRequest,
+    MatchingResult,
+    MeshCandidate,
+    MeshRecord,
+    ReconstructionAdapter,
+    ReconstructionResult,
+    SegmentationAdapter,
+    SegmentationRequest,
+    SegmentationResult,
 )
 from dollforge.domain.models import (
-    Artifact, CameraEstimate, DollGraph, JobStatus, JointSpec, Lineage, PartInstance,
-    PartObservation, Provenance, RunManifest, ScaleEstimate, Stage, StageResult, utcnow,
+    Artifact,
+    CameraEstimate,
+    DollGraph,
+    JobStatus,
+    JointSpec,
+    Lineage,
+    PartInstance,
+    PartObservation,
+    Provenance,
+    RunManifest,
+    ScaleEstimate,
+    Stage,
+    StageResult,
+    utcnow,
 )
 from dollforge.errors import DomainError, InvalidInput
 from dollforge.storage import Store, canonical, digest
