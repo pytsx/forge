@@ -5,7 +5,7 @@ import numpy as np
 import trimesh
 from PIL import Image, ImageFilter
 
-from dollforge.contracts import MaskProposal, MeshCandidate, SegmentationRequest
+from dollforge.contracts import MaskProposal, MeshCandidate, SegmentationRequest, VolumetryResult
 from dollforge.domain.models import DollGraph, ImageView, PartObservation, Provenance, Side
 
 
@@ -86,7 +86,8 @@ class EllipsoidReconstructor:
     model_version = "1.0.0"
 
     def reconstruct(self, graph: DollGraph, observations: list[PartObservation],
-                    views: list[ImageView]) -> list[MeshCandidate]:
+                    views: list[ImageView],
+                    volumetry: VolumetryResult | None = None) -> list[MeshCandidate]:
         by_id = {o.observation_id: o for o in observations}
         view_map = {v.view_id: v for v in views}
         bounds = {}
