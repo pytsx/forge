@@ -74,6 +74,7 @@ def create_app(service: Service | None = None) -> FastAPI:
         return {"status": "ok", "version": "0.1.0", "local_only": True,
                 "blender": service.engine.blender.model_version,
                 "segmentation": service.engine.segmenter.model_id,
+                "perception": service.engine.perception.model_id if service.engine.perception else "unavailable",
                 "reconstruction": service.engine.reconstructor.model_id}
 
     @app.get("/api/projects")
