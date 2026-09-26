@@ -41,12 +41,23 @@ def lineage(inputs: list[UUID], version: str = "1.0.0", seed: int = 42,
 class Engine:
     def __init__(self, store: Store, segmenter: SegmentationAdapter,
                  reconstructor: ReconstructionAdapter, blender: BlenderAdapter,
+                 segmenters: dict[str, SegmentationAdapter] | None = None,
                  matcher: MatchingAdapter | None = None):
         self.store = store
         self.segmenter = segmenter
+        self.segmenters = {segmenter.model_id: segmenter, **(segmenters or {})}
         self.reconstructor = reconstructor
         self.blender = blender
         self.matcher = matcher
+
+    def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
+        adapter = self.segmenters.get(adapter_id)
+        if adapter is None:
+            available = ", ".join(sorted(self.segmenters))
+            raise InvalidInput(
+                f"Segmentador '{adapter_id}' não configurado. Disponíveis: {available}"
+            )
+        return adapter
 
     def put(self, run: RunManifest, stage: Stage, kind: str, payload,
             inputs: list[UUID], media_type="application/json", provenance=None,
@@ -116,19 +127,20 @@ class Engine:
                 for v in run.views]), replay=replay)
             segments = []
             observations = []
+            segmenter = self.segmentation_adapter(run.config.segmentation_adapter)
             for view in run.views:
                 def segment(view=view):
                     request = SegmentationRequest(view=view,
                         image_png=self.store.read(view.normalized_artifact_id),
                         threshold=run.config.foreground_threshold, seed=run.config.seed)
-                    proposals = self.segmenter.predict(request)
+                    proposals = segmenter.predict(request)
                     if not proposals:
                         raise InvalidInput(f"Silhueta não encontrada em {view.label}. Use fundo uniforme.")
                     items = []
                     for proposal in proposals:
                         mask = self.put(run, Stage.SEGMENTATION, f"mask:{view.view_id}",
                             proposal.mask_png, [view.normalized_artifact_id], "image/png",
-                            proposal.provenance, self.segmenter.model_version)
+                            proposal.provenance, segmenter.model_version)
                         items.append(PartObservation(
                             observation_id=uuid5(view.view_id, f"{proposal.part_class}:{proposal.side}"),
                             view_id=view.view_id, part_class=proposal.part_class, side=proposal.side,
@@ -136,10 +148,14 @@ class Engine:
                             mask_artifact_id=mask.artifact_id, provenance=proposal.provenance,
                             alternatives=["relabel", "remask"],
                         ))
-                    return SegmentationResult(observations=items,
-                        warnings=["Propostas proporcionais, sem modelo semântico; revise todas as vistas."])
+                    warning = (
+                        "Propostas proporcionais, sem modelo semântico; revise todas as vistas."
+                        if segmenter.model_id == "silhouette_rules_v1"
+                        else "Segmentação semântica Grounding DINO + SAM 2; revise baixa confiança e oclusões."
+                    )
+                    return SegmentationResult(observations=items, warnings=[warning])
                 artifact = self.node(run, Stage.SEGMENTATION, str(view.view_id),
-                    [view.normalized_artifact_id], segment, self.segmenter.model_version, replay)
+                    [view.normalized_artifact_id], segment, segmenter.model_version, replay)
                 segments.append(artifact.artifact_id)
                 observations.extend(SegmentationResult.model_validate(
                     self.store.json(artifact.artifact_id)).observations)
@@ -148,6 +164,7 @@ class Engine:
                 *[view.normalized_artifact_id for view in run.views],
                 *[observation.mask_artifact_id for observation in observations],
             ]
+
             def match_views():
                 if run.config.matching_adapter == "semantic_side_matching_v1":
                     return self.match(run, observations)
@@ -168,6 +185,7 @@ class Engine:
                         for observation in observations
                     },
                 ))
+
             matching_version = (
                 self.matcher.model_version
                 if self.matcher and run.config.matching_adapter == self.matcher.model_id
