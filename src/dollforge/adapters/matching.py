@@ -114,6 +114,7 @@ class MultiSignalMatcher:
         )
 
     def match(self, request: MatchingRequest) -> MatchingResult:
+        max_distance = float(request.parameters.get("max_distance", self.max_distance))
         observations = [
             observation
             for observation in request.observations
@@ -139,7 +140,7 @@ class MultiSignalMatcher:
                 candidates.append((distance, index))
             if candidates:
                 distance, index = min(candidates)
-                if distance <= self.max_distance:
+                if distance <= max_distance:
                     groups[index].append(descriptor)
                     continue
             groups.append([descriptor])
