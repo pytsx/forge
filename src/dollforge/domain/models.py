@@ -92,6 +92,7 @@ class Stage(StrEnum):
     SCALE = "S07"
     GRAPH = "S08"
     PERCEPTION = "S09"
+    VOLUMETRY = "S09V"
     RECONSTRUCTION = "S10"
     BLENDER = "S15"
     VALIDATION = "S16"
@@ -307,7 +308,13 @@ class PipelineConfig(DTO):
     segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "grounded_sam2_v1"] = "contour_rules_v2"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
     perception_adapter: Literal["structured_perception_v1"] = "structured_perception_v1"
-    reconstruction_adapter: Literal["ellipsoid_multiview_v1", "doll_templates_multiview_v2"] = "doll_templates_multiview_v2"
+    volumetry_adapter: Literal["silhouette_visual_hull_v1"] = "silhouette_visual_hull_v1"
+    reconstruction_adapter: Literal[
+        "ellipsoid_multiview_v1",
+        "doll_templates_multiview_v2",
+        "silhouette_volume_mesh_v1",
+    ] = "silhouette_volume_mesh_v1"
+    volumetry_resolution: int = Field(default=32, ge=16, le=64)
     foreground_threshold: int = Field(default=32, ge=1, le=254)
     review_threshold: Score = 0.85
     build_blender: bool = True

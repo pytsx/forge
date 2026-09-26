@@ -6,9 +6,9 @@ const labels = {front:'Frente',back:'Costas',left:'Esquerda',right:'Direita'};
 const names = {head:'Cabeça',torso:'Torso',pelvis:'Pelve',arm:'Braço',leg:'Perna',footwear:'Calçado',hand:'Mão',foot:'Pé',upper_arm:'Braço superior',forearm:'Antebraço',thigh:'Coxa',shin:'Canela',hair:'Cabelo',face:'Rosto',top:'Roupa superior',bottom:'Roupa inferior',accessory:'Acessório'};
 const sides = {left:'esquerdo',right:'direito',center:'central',unknown:'indefinido',bilateral:'bilateral'};
 const states = {queued:'Na fila',running:'Em execução',succeeded:'Concluído',failed:'Falhou',waiting_for_review:'Aguardando revisão',approved:'Aprovado',needs_review:'Revisar',corrected:'Corrigido',rejected:'Rejeitado',unreviewed:'Sem revisão'};
-const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S08:'DollGraph',S09:'Perception Graph',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
+const stageNames = {S03:'Câmeras e orientação',S05:'Segmentação de peças',S06:'Correspondência multi-view',S07:'Alinhamento de escala',S08:'DollGraph',S09:'Perception Graph',S09V:'Volumetria multi-view',S10:'Reconstrução por peça',S15:'Projeto Blender',S16:'Validação geométrica'};
 const colors = ['#c6e397','#85b9bc','#d8ae7d','#c394ad','#859dd1','#b6c37a','#d1917e','#7db598','#a9a2cc'];
-const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,perception:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
+const state = {projects:[],project:null,views:[],runs:[],run:null,segments:[],matches:null,graph:null,perception:null,volumetry:null,reconstruction:null,report:null,activeView:null,selected:null,tab:'workspace',tool:'inspect',dirty:false,meshes:[]};
 let pollTimer, toastTimer, uploadLabel, baseImage, baseImageData, edgeData,
   maskLayer=document.createElement('canvas'), undo=[], paint=false, lastPoint=null,
   showEdges=false, lassoPoints=[], lassoPath=[];
@@ -53,7 +53,7 @@ async function selectProject(id){
   render();
 }
 async function selectRun(run){
-  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.perception=null;state.reconstruction=null;state.report=null;state.meshes=[];
+  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.perception=null;state.volumetry=null;state.reconstruction=null;state.report=null;state.meshes=[];
   if(run){
     const outputs=await Promise.all(run.stages.filter(s=>s.output_artifact_id&&!s.invalidated).map(async s=>({stage:s,data:await content(s.output_artifact_id)})));
     for(const {stage:s,data} of outputs){
@@ -61,6 +61,7 @@ async function selectRun(run){
       if(s.stage==='S06')state.matches={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S08')state.graph={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S09')state.perception={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S09V')state.volumetry={...data,artifact_id:s.output_artifact_id};
       if(s.stage==='S10')state.reconstruction=data;
       if(s.stage==='S16')state.report=data;
     }
@@ -115,7 +116,7 @@ function render(){
   $('#seg-view').innerHTML=viewOptions.map(v=>`<option value="${v.view_id}" ${v.view_id===state.activeView?'selected':''}>${esc(labels[v.label]||v.label)}</option>`).join('');
   if(!viewOptions.some(v=>v.view_id===state.activeView))state.activeView=viewOptions[0]?.view_id;
   $('#run-select').innerHTML=state.runs.map(r=>`<option value="${r.run_id}" ${r.run_id===run?.run_id?'selected':''}>${new Date(r.created_at).toLocaleString('pt-BR')} · ${r.run_id.slice(0,8)}</option>`).join('');
-  renderPipeline();renderObservations();renderMatches();renderPerception();renderValidation();
+  renderPipeline();renderObservations();renderMatches();renderPerception();renderVolumetry();renderValidation();
   $('#download').disabled=!run||invalid||['queued','running'].includes(run.status);
   $('#replay').disabled=!run||invalid||['queued','running'].includes(run.status);
   $('#final-review').disabled=!node('S16')||invalid;
@@ -301,6 +302,29 @@ function renderPerception(){
   const relations=graph.relations.map(r=>`<div class="perception-row"><span>${esc(partLabel(r.subject_part_id))}</span><strong>${esc(relationLabels[r.predicate]||r.predicate)}</strong><span>${esc(partLabel(r.object_part_id))}</span><em class="evidence ${esc(r.evidence_kind)}">${esc(evidenceLabels[r.evidence_kind]||r.evidence_kind)}</em></div>`).join('')||'<p class="muted">Sem relações suficientes.</p>';
   const interfaces=graph.interfaces.map(i=>`<div class="interface-row"><div><strong>${esc(partLabel(i.part_a_id))} ↔ ${esc(partLabel(i.part_b_id))}</strong><small>${esc(i.candidate_joint_type||i.role)}</small></div><span class="evidence ${esc(i.evidence_kind)}">${esc(evidenceLabels[i.evidence_kind]||i.evidence_kind)}</span></div>`).join('')||'<p class="muted">Nenhuma interface candidata.</p>';
   target.innerHTML=`<div class="perception-summary"><div><small>OBJETO</small><strong>${esc(graph.object_type)}</strong></div><div><small>SIMETRIA</small><strong>${esc(graph.symmetry)}</strong></div><div><small>REGIÕES</small><strong>${graph.major_regions.map(esc).join(' · ')}</strong></div><div><small>ESTILO</small><strong>${esc(graph.style_family||'não informado')}</strong></div></div><h3>Peças percebidas</h3><div class="perception-grid">${partCards}</div><div class="perception-columns"><section><h3>Relações</h3>${relations}</section><section><h3>Interfaces candidatas</h3>${interfaces}</section></div><div class="perception-warnings">${graph.warnings.map(w=>`<p>△ ${esc(w)}</p>`).join('')}</div>`;
+}
+
+function renderVolumetry(){
+  const target=$('#volumetry-content');
+  if(!target)return;
+  const result=state.volumetry;
+  if(!result){target.className='panel padded empty-text';target.innerHTML='Execute o pipeline para gerar volumes por peça.';return;}
+  target.className='panel padded';
+  const scale=(value)=>Math.max(0,Math.min(1,value));
+  const spark=volume=>{
+    const slices=volume.slices||[];
+    if(!slices.length)return '';
+    const points=(key)=>{
+      const values=slices.map(s=>scale((s[key]||0)*2));
+      return values.map((v,i)=>`${(i/(values.length-1||1))*100},${48-v*42}`).join(' ');
+    };
+    return `<svg class="volume-profile" viewBox="0 0 100 52" preserveAspectRatio="none" aria-label="Perfil volumétrico"><line x1="0" y1="48" x2="100" y2="48"></line><polyline class="width-line" points="${points('half_width_norm')}"></polyline><polyline class="depth-line" points="${points('half_depth_norm')}"></polyline></svg>`;
+  };
+  const cards=result.volumes.map(v=>{
+    const ext=v.extents_xyz||[0,0,0];
+    return `<article class="volume-card"><div class="volume-card-head"><strong>${esc(v.name)}</strong><span>${Math.round(v.confidence*100)}%</span></div>${spark(v)}<div class="volume-legend"><span class="width-key">Largura</span><span class="depth-key">Profundidade</span></div><dl><div><dt>Dimensões</dt><dd>${ext.map(x=>Number(x).toFixed(3)).join(' × ')}</dd></div><div><dt>Seções</dt><dd>${v.slices.length}</dd></div><div><dt>Vistas</dt><dd>${v.source_views.map(x=>labels[x]||x).join(' · ')}</dd></div><div><dt>Concavidades</dt><dd>${v.concavity_support?'suportadas':'pendente depth/normals'}</dd></div></dl></article>`;
+  }).join('');
+  target.innerHTML=`<div class="volume-summary"><div><small>MÉTODO</small><strong>${esc(result.method)}</strong></div><div><small>PEÇAS COM VOLUME</small><strong>${result.volumes.length}</strong></div><div><small>UNIDADE</small><strong>${esc(result.unit)}</strong></div></div><div class="volume-grid">${cards}</div><div class="perception-warnings">${result.warnings.map(w=>`<p>△ ${esc(w)}</p>`).join('')}</div>`;
 }
 
 function renderValidation(){

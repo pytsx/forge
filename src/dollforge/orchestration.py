@@ -28,6 +28,9 @@ from dollforge.contracts import (
     SegmentationAdapter,
     SegmentationRequest,
     SegmentationResult,
+    VolumetryAdapter,
+    VolumetryRequest,
+    VolumetryResult,
 )
 from dollforge.domain.models import (
     Artifact,
@@ -46,6 +49,7 @@ from dollforge.domain.models import (
     utcnow,
 )
 from dollforge.errors import DomainError, InvalidInput
+from dollforge.perception.models import PerceptionGraph
 from dollforge.storage import Store, canonical, digest
 
 log = structlog.get_logger()
@@ -70,6 +74,7 @@ class Engine:
                  segmenters: dict[str, SegmentationAdapter] | None = None,
                  matcher: MatchingAdapter | None = None,
                  perception: PerceptionAdapter | None = None,
+                 volumetry: VolumetryAdapter | None = None,
                  reconstructors: dict[str, ReconstructionAdapter] | None = None):
         self.store = store
         self.segmenter = segmenter
@@ -79,6 +84,7 @@ class Engine:
         self.blender = blender
         self.matcher = matcher
         self.perception = perception
+        self.volumetry = volumetry
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -96,6 +102,14 @@ class Engine:
                 f"Perception adapter '{adapter_id}' não configurado. Disponível: {available}"
             )
         return self.perception
+
+    def volumetry_adapter(self, adapter_id: str) -> VolumetryAdapter:
+        if self.volumetry is None or self.volumetry.model_id != adapter_id:
+            available = self.volumetry.model_id if self.volumetry is not None else "none"
+            raise InvalidInput(
+                f"Volumetry adapter '{adapter_id}' não configurado. Disponível: {available}"
+            )
+        return self.volumetry
 
     def reconstruction_adapter(self, adapter_id: str) -> ReconstructionAdapter:
         adapter = self.reconstructors.get(adapter_id)
@@ -291,7 +305,7 @@ class Engine:
                     style_family=run.project_snapshot.style_family,
                 ))
 
-            self.node(
+            perception_art = self.node(
                 run,
                 Stage.PERCEPTION,
                 "all",
@@ -300,14 +314,53 @@ class Engine:
                 perception_adapter.model_version,
                 replay=replay,
             )
+            perception_value = PerceptionGraph.model_validate(
+                self.store.json(perception_art.artifact_id)
+            )
+
+            volumetry_adapter = self.volumetry_adapter(run.config.volumetry_adapter)
+            volumetry_inputs = [
+                perception_art.artifact_id,
+                graph_art.artifact_id,
+                *[observation.mask_artifact_id for observation in observations],
+            ]
+
+            def build_volume():
+                return volumetry_adapter.build(VolumetryRequest(
+                    project_id=run.project_id,
+                    graph=graph,
+                    perception=perception_value,
+                    observations=observations,
+                    views=run.views,
+                    mask_png_by_observation={
+                        observation.observation_id: self.store.read(observation.mask_artifact_id)
+                        for observation in observations
+                    },
+                    resolution=run.config.volumetry_resolution,
+                ))
+
+            volumetry_art = self.node(
+                run,
+                Stage.VOLUMETRY,
+                "all",
+                volumetry_inputs,
+                build_volume,
+                volumetry_adapter.model_version,
+                replay=replay,
+            )
+            volumetry_value = VolumetryResult.model_validate(
+                self.store.json(volumetry_art.artifact_id)
+            )
             reconstructor = self.reconstruction_adapter(run.config.reconstruction_adapter)
 
             def reconstruct():
-                candidates = reconstructor.reconstruct(graph, observations, run.views)
+                candidates = reconstructor.reconstruct(
+                    graph, observations, run.views, volumetry_value
+                )
                 records = []
                 for candidate in candidates:
                     mesh = trimesh.Trimesh(candidate.vertices, candidate.faces, process=False)
-                    parent = [graph_art.artifact_id, *segments]
+                    parent = [graph_art.artifact_id, volumetry_art.artifact_id]
                     stl = self.put(run, Stage.RECONSTRUCTION, f"mesh:{candidate.part_instance_id}",
                         mesh.export(file_type="stl"), parent, "model/stl", candidate.provenance,
                         reconstructor.model_version)
@@ -318,15 +371,29 @@ class Engine:
                         name=candidate.name, mesh_artifact_id=stl.artifact_id,
                         preview_artifact_id=preview.artifact_id, confidence=candidate.confidence,
                         provenance=candidate.provenance, transform=candidate.transform))
-                warning = (
-                    "Templates semânticos de bonecos; forma melhorada, ainda sem encaixes mecânicos."
-                    if reconstructor.model_id == "doll_templates_multiview_v2"
-                    else "Geometria baseline; não reproduz detalhes nem encaixes."
+                warnings = {
+                    "silhouette_volume_mesh_v1":
+                        "Superfície guiada por volume multi-view; relevos internos ainda exigem depth/normals.",
+                    "doll_templates_multiview_v2":
+                        "Templates semânticos de bonecos; forma melhorada, ainda sem encaixes mecânicos.",
+                    "ellipsoid_multiview_v1":
+                        "Geometria baseline; não reproduz detalhes nem encaixes.",
+                }
+                warning = warnings.get(
+                    reconstructor.model_id,
+                    "Reconstrução automática; revise fidelidade e continuidade.",
                 )
                 return ReconstructionResult(meshes=records, unit=graph.scale.unit,
                     warnings=[warning])
-            reconstruction = self.node(run, Stage.RECONSTRUCTION, "all",
-                [graph_art.artifact_id, *segments], reconstruct, reconstructor.model_version, replay)
+            reconstruction = self.node(
+                run,
+                Stage.RECONSTRUCTION,
+                "all",
+                [graph_art.artifact_id, volumetry_art.artifact_id],
+                reconstruct,
+                reconstructor.model_version,
+                replay,
+            )
             reconstructed = ReconstructionResult.model_validate(self.store.json(reconstruction.artifact_id))
             candidates = [MeshCandidate.model_validate(self.store.json(m.preview_artifact_id))
                           for m in reconstructed.meshes]
