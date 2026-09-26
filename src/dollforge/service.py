@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps, UnidentifiedImageError
 
 from dollforge.adapters.baseline import png
+from dollforge.adapters.contour import transfer_human_mask
 from dollforge.contracts import MatchingResult, SegmentationResult
 from dollforge.domain.models import (
     CreateProject, DollGraph, DollProject, FeedbackEvent, ImageQA, ImageView, JobStatus,
@@ -109,6 +110,102 @@ class Service:
             run = self.store.get("run", run_id, RunManifest)
             previous = self.store.get("run", run.replay_of, RunManifest) if run.replay_of else None
             return self.engine.execute(run, previous)
+
+    @staticmethod
+    def _is_human_locked(observation) -> bool:
+        return observation.review_state in (ReviewState.APPROVED, ReviewState.CORRECTED) or (
+            observation.provenance.type in ("human_edited", "human_approved")
+        )
+
+    def _propagate_segmentation_feedback(self, run: RunManifest, source_observation,
+                                         source_mask_artifact_id: UUID,
+                                         reviewer: str) -> list[UUID]:
+        """Recalculate untouched views from one human-corrected mask.
+
+        This is project-local online adaptation, not weight training. Human-reviewed
+        targets are never overwritten. Each generated mask remains reviewable and
+        records the corrected source mask as evidence.
+        """
+        source_mask = self.store.read(source_mask_artifact_id)
+        changed_previous_artifacts: list[UUID] = []
+
+        for node in run.stages:
+            if node.stage != Stage.SEGMENTATION or node.invalidated or not node.output_artifact_id:
+                continue
+            payload = SegmentationResult.model_validate(self.store.json(node.output_artifact_id))
+            changed = False
+            new_inputs = [node.output_artifact_id, source_mask_artifact_id]
+
+            for observation in payload.observations:
+                if observation.observation_id == source_observation.observation_id:
+                    continue
+                if observation.part_class != source_observation.part_class:
+                    continue
+                if observation.side != source_observation.side:
+                    continue
+                if self._is_human_locked(observation):
+                    continue
+
+                view = next(v for v in run.views if v.view_id == observation.view_id)
+                transferred = transfer_human_mask(
+                    source_mask_png=source_mask,
+                    target_image_png=self.store.read(view.normalized_artifact_id),
+                    target_mask_png=self.store.read(observation.mask_artifact_id),
+                    target=observation,
+                    threshold=run.config.foreground_threshold,
+                )
+                if not transferred:
+                    continue
+
+                mask_png, box = transferred
+                provenance = Provenance(
+                    type="model_inferred",
+                    source="human_guided_mask_transfer_v1",
+                    evidence=[source_mask_artifact_id, observation.mask_artifact_id],
+                    note=(
+                        "Máscara recalculada a partir de correção humana em outra vista; "
+                        "permanece pendente de revisão."
+                    ),
+                )
+                mask_art = self.engine.put(
+                    run,
+                    Stage.SEGMENTATION,
+                    f"mask:{view.view_id}",
+                    mask_png,
+                    [source_mask_artifact_id, observation.mask_artifact_id],
+                    "image/png",
+                    provenance,
+                    version="1.0.0",
+                )
+                observation.mask_artifact_id = mask_art.artifact_id
+                observation.bbox_xyxy = box
+                observation.confidence = min(.92, max(observation.confidence, .66))
+                observation.review_state = ReviewState.NEEDS_REVIEW
+                observation.provenance = provenance
+                new_inputs.append(mask_art.artifact_id)
+                changed = True
+
+            if changed:
+                previous = node.output_artifact_id
+                revised = self.engine.put(
+                    run,
+                    Stage.SEGMENTATION,
+                    self.store.metadata(previous).kind,
+                    payload,
+                    new_inputs,
+                    provenance=Provenance(
+                        type="model_inferred",
+                        source="human_guided_mask_transfer_v1",
+                        evidence=[source_mask_artifact_id],
+                        note=f"Adaptação online do projeto após correção por {reviewer}.",
+                    ),
+                    version="1.0.0",
+                )
+                node.output_artifact_id = revised.artifact_id
+                self.store.set_cache(node.cache_key, revised.artifact_id)
+                changed_previous_artifacts.append(previous)
+
+        return changed_previous_artifacts
 
     def review(self, run_id: UUID, request: ReviewRequest) -> FeedbackEvent:
         with self.store.lock:
@@ -223,12 +320,23 @@ class Service:
             else:
                 raise InvalidInput("Esta etapa aceita apenas avaliação final multidimensional.")
             after = None
+            propagated_dirty: list[UUID] = []
             if revised is not None:
                 after = self.engine.put(run, stage.stage, artifact.kind, revised, inputs,
                                         provenance=provenance)
                 stage.output_artifact_id = after.artifact_id
                 self.store.set_cache(stage.cache_key, after.artifact_id)
-                dirty = {request.artifact_id}
+
+                if stage.stage == Stage.SEGMENTATION and request.action == ReviewAction.REMASK:
+                    source = next(
+                        o for o in revised.observations
+                        if o.observation_id == request.target_id
+                    )
+                    propagated_dirty = self._propagate_segmentation_feedback(
+                        run, source, source.mask_artifact_id, request.reviewer
+                    )
+
+                dirty = {request.artifact_id, *propagated_dirty}
                 for node in run.stages:
                     if node is not stage and dirty.intersection(node.input_artifact_ids):
                         node.invalidated = True

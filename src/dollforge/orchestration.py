@@ -42,11 +42,13 @@ class Engine:
     def __init__(self, store: Store, segmenter: SegmentationAdapter,
                  reconstructor: ReconstructionAdapter, blender: BlenderAdapter,
                  segmenters: dict[str, SegmentationAdapter] | None = None,
-                 matcher: MatchingAdapter | None = None):
+                 matcher: MatchingAdapter | None = None,
+                 reconstructors: dict[str, ReconstructionAdapter] | None = None):
         self.store = store
         self.segmenter = segmenter
         self.segmenters = {segmenter.model_id: segmenter, **(segmenters or {})}
         self.reconstructor = reconstructor
+        self.reconstructors = {reconstructor.model_id: reconstructor, **(reconstructors or {})}
         self.blender = blender
         self.matcher = matcher
 
@@ -56,6 +58,15 @@ class Engine:
             available = ", ".join(sorted(self.segmenters))
             raise InvalidInput(
                 f"Segmentador '{adapter_id}' não configurado. Disponíveis: {available}"
+            )
+        return adapter
+
+    def reconstruction_adapter(self, adapter_id: str) -> ReconstructionAdapter:
+        adapter = self.reconstructors.get(adapter_id)
+        if adapter is None:
+            available = ", ".join(sorted(self.reconstructors))
+            raise InvalidInput(
+                f"Reconstrutor '{adapter_id}' não configurado. Disponíveis: {available}"
             )
         return adapter
 
@@ -148,10 +159,17 @@ class Engine:
                             mask_artifact_id=mask.artifact_id, provenance=proposal.provenance,
                             alternatives=["relabel", "remask"],
                         ))
-                    warning = (
-                        "Propostas proporcionais, sem modelo semântico; revise todas as vistas."
-                        if segmenter.model_id == "silhouette_rules_v1"
-                        else "Segmentação semântica Grounding DINO + SAM 2; revise baixa confiança e oclusões."
+                    warnings = {
+                        "silhouette_rules_v1":
+                            "Propostas proporcionais; revise todas as vistas.",
+                        "contour_rules_v2":
+                            "Máscaras seguem contorno e priors de bonecos; revise limites entre peças.",
+                        "grounded_sam2_v1":
+                            "Segmentação Grounding DINO + SAM 2; revise baixa confiança e oclusões.",
+                    }
+                    warning = warnings.get(
+                        segmenter.model_id,
+                        "Segmentação automática; revise limites e identidade das peças.",
                     )
                     return SegmentationResult(observations=items, warnings=[warning])
                 artifact = self.node(run, Stage.SEGMENTATION, str(view.view_id),
@@ -209,26 +227,33 @@ class Engine:
             graph_art = self.node(run, Stage.GRAPH, "all", [matches.artifact_id, scale.artifact_id],
                 lambda: self.graph(run, matched, scale_value), replay=replay)
             graph = DollGraph.model_validate(self.store.json(graph_art.artifact_id))
+            reconstructor = self.reconstruction_adapter(run.config.reconstruction_adapter)
+
             def reconstruct():
-                candidates = self.reconstructor.reconstruct(graph, observations, run.views)
+                candidates = reconstructor.reconstruct(graph, observations, run.views)
                 records = []
                 for candidate in candidates:
                     mesh = trimesh.Trimesh(candidate.vertices, candidate.faces, process=False)
                     parent = [graph_art.artifact_id, *segments]
                     stl = self.put(run, Stage.RECONSTRUCTION, f"mesh:{candidate.part_instance_id}",
                         mesh.export(file_type="stl"), parent, "model/stl", candidate.provenance,
-                        self.reconstructor.model_version)
+                        reconstructor.model_version)
                     preview = self.put(run, Stage.RECONSTRUCTION,
                         f"preview:{candidate.part_instance_id}", candidate, parent,
-                        provenance=candidate.provenance, version=self.reconstructor.model_version)
+                        provenance=candidate.provenance, version=reconstructor.model_version)
                     records.append(MeshRecord(part_instance_id=candidate.part_instance_id,
                         name=candidate.name, mesh_artifact_id=stl.artifact_id,
                         preview_artifact_id=preview.artifact_id, confidence=candidate.confidence,
                         provenance=candidate.provenance, transform=candidate.transform))
+                warning = (
+                    "Templates semânticos de bonecos; forma melhorada, ainda sem encaixes mecânicos."
+                    if reconstructor.model_id == "doll_templates_multiview_v2"
+                    else "Geometria baseline; não reproduz detalhes nem encaixes."
+                )
                 return ReconstructionResult(meshes=records, unit=graph.scale.unit,
-                    warnings=["Geometria baseline; não reproduz detalhes nem encaixes."])
+                    warnings=[warning])
             reconstruction = self.node(run, Stage.RECONSTRUCTION, "all",
-                [graph_art.artifact_id, *segments], reconstruct, self.reconstructor.model_version, replay)
+                [graph_art.artifact_id, *segments], reconstruct, reconstructor.model_version, replay)
             reconstructed = ReconstructionResult.model_validate(self.store.json(reconstruction.artifact_id))
             candidates = [MeshCandidate.model_validate(self.store.json(m.preview_artifact_id))
                           for m in reconstructed.meshes]
