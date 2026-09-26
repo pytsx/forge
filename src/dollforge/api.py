@@ -179,7 +179,7 @@ def create_app(service: Service | None = None) -> FastAPI:
             for identifier in sorted(identifiers, key=str):
                 meta = service.store.metadata(identifier)
                 extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
-                    "application/x-blender": "blend", "model/stl": "stl"}.get(meta.media_type, "json")
+                    "application/x-blender": "blend", "application/x-npz": "npz", "model/stl": "stl"}.get(meta.media_type, "json")
                 archive.writestr(f"artifacts/{identifier}.{extension}", service.store.read(identifier))
                 archive.writestr(f"metadata/{identifier}.json", meta.model_dump_json(indent=2))
             archive.writestr("README.txt", "DollForge: baseline supervisionado. Não validado para fabricação.\n"
