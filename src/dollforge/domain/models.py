@@ -326,7 +326,13 @@ class PrintProfile(DTO):
 class PipelineConfig(DTO):
     output_mode: Literal["draft", "strict"] = "strict"
     seed: int = 42
-    segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "contour_rules_v3", "grounded_sam2_v1"] = "contour_rules_v3"
+    segmentation_adapter: Literal[    
+        "silhouette_rules_v1",
+        "contour_rules_v2",
+        "contour_rules_v3",
+        "boundary_cells_v1",
+        "grounded_sam2_v1"
+    ] = "contour_rules_v3"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
     perception_adapter: Literal["structured_perception_v1"] = "structured_perception_v1"
     volumetry_adapter: Literal[
