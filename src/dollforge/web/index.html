@@ -42,7 +42,7 @@
 </div></aside></div>
 <footer class="app-status"><span>RH ? Z ? ? Frente ?Y</span><span id="scene-stats">0 pe?as ? 0 tri?ngulos</span><div class="bar-spacer"></div><span>RECONSTRU??O SUPERVISIONADA</span></footer>
 <dialog id="mask-dialog"><div class="mask-dialog-heading"><strong>EDITOR DE M?SCARAS</strong><button id="close-mask-editor" class="button secondary small">Voltar ? cena ?</button></div><section id="tab-segmentation">
-    <div class="section-title"><div><h2>Revisão de segmentação</h2><p>Esquerda e direita são sempre do personagem.</p></div><select id="seg-view" aria-label="Vista para revisar"></select></div>
+    <div class="section-title"><div><h2>Revisão de segmentação</h2><p>Esquerda e direita são sempre do personagem.</p></div><button id="resegment" class="button secondary small">Configurar e reprocessar</button><select id="seg-view" aria-label="Vista para revisar"></select></div>
     <div class="editor-grid"><article class="panel canvas-panel"><div class="editor-toolbar smart-toolbar">
       <div class="tool-row primary-tools">
         <button data-tool="inspect" class="active" title="Inspecionar sem editar">↖ Inspecionar</button>
@@ -72,6 +72,20 @@
 <dialog id="print-dialog"><form id="print-form">
   <div class="eyebrow">IMPRESSÃO 3D E PROTOTIPAGEM</div><h2>Critérios desta execução</h2>
   <p>Os limites ficam registrados junto ao resultado. Verificações não configuradas aparecem como pendentes.</p>
+  <fieldset><legend>Segmentação das peças</legend>
+    <p id="segmentation-current" class="muted"></p>
+    <label>Método<select name="segmentation_adapter" id="segmentation-adapter">
+      <option value="contour_rules_v3">Bordas e pescoço — v3 (recomendado)</option>
+      <option value="contour_rules_v2">Contornos proporcionais — v2</option>
+      <option value="silhouette_rules_v1">Silhueta — v1</option>
+      <option value="grounded_sam2_v1">Grounding DINO + SAM 2 (requer instalação no servidor)</option>
+    </select></label>
+    <label><input type="checkbox" name="segmentation_split_dark_hair"> Separar cabelo escuro do rosto</label>
+    <p>Na v3, ajuda em referências com cabelo escuro e rosto claro. Revise o recorte gerado.</p>
+    <label>Altura do corte do pescoço (%) <span>opcional, somente v3</span><input name="segmentation_neck_percent" type="number" min="15" max="70" step="any" placeholder="Automática"></label>
+    <p>Medida do topo à base do personagem; aplica-se às quatro vistas. Deixe vazio para estimar automaticamente.</p>
+    <p>Será criada uma nova execução com as vistas atuais, novas propostas de máscaras e reconstrução. Resultados e correções anteriores permanecem no histórico; não são transferidos para as novas máscaras.</p>
+  </fieldset>
   <label>Objetivo<select name="output_mode"><option value="draft">Pr?via 3D ? continuar com problemas sinalizados</option><option value="strict">Inspe??o rigorosa ? parar ao falhar um crit?rio</option></select></label><label>Nome do perfil<input name="name" required maxlength="120" value="Prototipagem 3D"></label>
   <label>Processo<select name="process"><option value="unspecified">A definir</option><option value="fdm">FDM / FFF</option><option value="sla">SLA / resina</option><option value="sls">SLS</option></select></label>
   <label>Material <span>opcional</span><input name="material" maxlength="120" placeholder="Material utilizado na impressão"></label>
