@@ -13,6 +13,29 @@ let pollTimer, toastTimer, uploadLabel, baseImage, baseImageData, edgeData,
   maskLayer=document.createElement('canvas'), undo=[], paint=false, lastPoint=null,
   showEdges=false, lassoPoints=[], lassoPath=[];
 
+function syncSegmentationControls(){
+  const form=$('#print-form'),v3=form.elements.segmentation_adapter.value==='contour_rules_v3';
+  form.elements.segmentation_split_dark_hair.disabled=!v3;
+  form.elements.segmentation_neck_percent.disabled=!v3;
+}
+function openRunSettings(){
+  if(state.dirty)throw new Error('Salve a correção da máscara antes de iniciar uma nova execução.');
+  const form=$('#print-form'),config=state.run?.config||{},profile=config.print_profile;
+  form.reset();
+  if(profile){for(const key of ['name','process','material','max_voxel_size_mm'])form.elements[key].value=profile[key]??'';
+    ['build_x','build_y','build_z'].forEach((key,i)=>form.elements[key].value=profile.build_volume_mm?.[i]??'');}
+  form.elements.resolution.value=config.volumetry_resolution||64;
+  form.elements.output_mode.value=config.output_mode||'draft';
+  form.elements.segmentation_adapter.value=config.segmentation_adapter||'contour_rules_v3';
+  form.elements.segmentation_split_dark_hair.checked=!!config.segmentation_split_dark_hair;
+  form.elements.segmentation_neck_percent.value=config.segmentation_neck_fraction==null?'':config.segmentation_neck_fraction*100;
+  $('#segmentation-current').textContent=state.run
+    ?`Método da execução selecionada: ${config.segmentation_adapter||'não registrado'}. Escolha abaixo o método da próxima execução.`
+    :'Nova execução: bordas e pescoço (v3).';
+  syncSegmentationControls();
+  $('#print-dialog').showModal();
+}
+
 async function api(path, options={}) {
   const headers = options.body && !(options.body instanceof FormData) ? {'Content-Type':'application/json'} : {};
   const response = await fetch('/api'+path,{...options,headers:{...headers,...options.headers}});
@@ -129,6 +152,7 @@ function render(){
   $('#parts-metric').textContent=state.matches?.parts.length??'—';
   $('#scale-metric').textContent=project?.known_height_mm?`${project.known_height_mm} mm`:'Relativa';
   $('#run-metric').textContent=run?states[run.status]:(state.views.length===4?'Pronto para executar':'Aguardando vistas');
+  $('#resegment').disabled=!project||state.views.length<4||['queued','running'].includes(run?.status);
   $('#run-button').disabled=!project||state.views.length<4||['queued','running'].includes(run?.status);
   $('#run-button').innerHTML=['queued','running'].includes(run?.status)?'◌ Processando…':'▷ Gerar modelo 3D';
   $('#review-count').textContent=state.segments.reduce((a,s)=>a+s.observations.filter(o=>o.review_state!=='approved').length,0)||'';
@@ -171,7 +195,7 @@ function renderObservations(){
   if(segment&&!segment.observations.some(o=>o.observation_id===state.selected))state.selected=segment.observations[0]?.observation_id;
   $('#observations').innerHTML=segment?.observations.map((o,i)=>`<div class="observation ${o.observation_id===state.selected?'selected':''}" role="button" tabindex="0" data-observation="${o.observation_id}"><span class="swatch" style="background:${colors[i%colors.length]}"></span><div><strong>${esc(partName(o))}</strong><small>${states[o.review_state]}</small></div><span class="confidence">${Math.round(o.confidence*100)}%</span></div>`).join('')||'<p class="muted">Nenhuma proposta disponível.</p>';
   const o=selectedObservation();
-  $('#part-details').innerHTML=o?`<label>Classe semântica<select id="part-class">${Object.entries(names).map(([k,v])=>`<option value="${k}" ${k===o.class?'selected':''}>${v}</option>`).join('')}</select></label><label>Lado do personagem<select id="part-side">${Object.entries(sides).map(([k,v])=>`<option value="${k}" ${k===o.side?'selected':''}>${v}</option>`).join('')}</select></label><button id="relabel" class="button secondary small full">Salvar rótulo</button><p>Origem: ${esc(o.provenance.type)}<br>${esc(o.provenance.note||o.provenance.source)}</p><div class="button-row"><button id="approve-part" class="button primary small">✓ Aprovar</button><button id="reject-part" class="button secondary small">Rejeitar</button></div>`:'';
+  $('#part-details').innerHTML=o?`<label>Classe semântica<select id="part-class">${Object.entries(names).map(([k,v])=>`<option value="${k}" ${k===o.class?'selected':''}>${v}</option>`).join('')}</select></label><label>Lado do personagem<select id="part-side">${Object.entries(sides).map(([k,v])=>`<option value="${k}" ${k===o.side?'selected':''}>${v}</option>`).join('')}</select></label><button id="relabel" class="button secondary small full">Salvar rótulo</button><p>Origem: ${esc(o.provenance.type)}<br>Gerador desta máscara: ${esc(o.provenance.source)}<br>${esc(o.provenance.note||o.provenance.source)}</p><div class="button-row"><button id="approve-part" class="button primary small">✓ Aprovar</button><button id="reject-part" class="button secondary small">Rejeitar</button></div>`:'';
   $('#save-mask').disabled=!state.dirty;
 }
 function imageLoad(url){return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error('Não foi possível carregar a imagem'));image.src=url;});}
@@ -398,15 +422,7 @@ document.addEventListener('click',event=>{const target=event.target.closest('but
   if(target.id==='cancel-feedback')$('#feedback-dialog').close();
     if(target.id==='cancel-print')$('#print-dialog').close();
     if(target.id==='close-mask-editor'){$('#mask-dialog').close();draw3D();}
-  if(target.id==='run-button'){
-    const form=$('#print-form'),profile=state.run?.config.print_profile;
-    form.reset();
-    if(profile){for(const key of ['name','process','material','max_voxel_size_mm'])form.elements[key].value=profile[key]??'';
-      ['build_x','build_y','build_z'].forEach((key,i)=>form.elements[key].value=profile.build_volume_mm?.[i]??'');}
-    form.elements.resolution.value=state.run?.config.volumetry_resolution||64;
-    form.elements.output_mode.value='draft';
-    $('#print-dialog').showModal();
-  }
+  if(target.id==='run-button'||target.id==='resegment')openRunSettings();
   if(target.dataset.observation){state.selected=target.dataset.observation;await loadMask();}
   if(target.dataset.tool){
     if(state.tool==='lasso'&&target.dataset.tool!=='lasso'&&lassoPoints.length)resetLasso();
@@ -429,13 +445,17 @@ document.addEventListener('click',event=>{const target=event.target.closest('but
   if(target.id==='replay'){const run=await api(`/runs/${state.run.run_id}/replay`,{method:'POST'});state.runs.unshift(run);await selectRun(run);}
   if(target.id==='final-review')$('#feedback-dialog').showModal();
 });});
+$('#segmentation-adapter').addEventListener('change',syncSegmentationControls);
 $('#print-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{
   const data=Object.fromEntries(new FormData(event.target)),axes=[data.build_x,data.build_y,data.build_z];
   if(axes.some(Boolean)&&!axes.every(Boolean))throw new Error('Preencha os três eixos do volume útil.');
   const profile={...(state.run?.config.print_profile||{}),name:data.name,process:data.process,material:data.material||null,max_voxel_size_mm:data.max_voxel_size_mm?Number(data.max_voxel_size_mm):null,build_volume_mm:axes.every(Boolean)?axes.map(Number):null};
-  const config={...(state.run?.config||{}),output_mode:data.output_mode,volumetry_resolution:Number(data.resolution),print_profile:profile};
+  const config={...(state.run?.config||{}),output_mode:data.output_mode,volumetry_resolution:Number(data.resolution),print_profile:profile,
+    segmentation_adapter:data.segmentation_adapter,
+    segmentation_split_dark_hair:data.segmentation_adapter==='contour_rules_v3'&&data.segmentation_split_dark_hair==='on',
+    segmentation_neck_fraction:data.segmentation_adapter==='contour_rules_v3'&&data.segmentation_neck_percent?Number(data.segmentation_neck_percent)/100:null};
   const button=event.target.querySelector('[type="submit"]');button.disabled=true;
-  try{const run=await api(`/projects/${state.project.project_id}/runs`,{method:'POST',body:JSON.stringify(config)});$('#print-dialog').close();state.runs.unshift(run);await selectRun(run);setTab('pipeline');}finally{button.disabled=false;}
+  try{const run=await api(`/projects/${state.project.project_id}/runs`,{method:'POST',body:JSON.stringify(config)});$('#print-dialog').close();$('#mask-dialog').close();state.runs.unshift(run);await selectRun(run);setTab('pipeline');}finally{button.disabled=false;}
 });});
 $('#project-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{const data=Object.fromEntries(new FormData(event.target));data.known_height_mm=data.known_height_mm?Number(data.known_height_mm):null;data.style_family=data.style_family||null;const p=await api('/projects',{method:'POST',body:JSON.stringify(data)});$('#project-dialog').close();event.target.reset();await loadProjects(p.project_id);setTab('workspace');toast('Projeto criado. Adicione as quatro vistas para começar.');});});
 $('#file-upload').addEventListener('change',event=>action(async()=>{const file=event.target.files[0];if(!file)return;const data=new FormData();data.append('label',uploadLabel);data.append('file',file);await api(`/projects/${state.project.project_id}/views`,{method:'POST',body:data});const id=state.project.project_id;await loadProjects(id);event.target.value='';toast('Vista importada. Original preservado.');}));

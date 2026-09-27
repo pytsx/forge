@@ -41,3 +41,18 @@ a boundary away from the seed midpoint, hair opt-in, blank images and invalid
 neck overrides. A resized user-supplied Pipo front reference was visually inspected;
 its annotations are not ground truth and no IoU improvement is claimed. Hair/face
 and neck alignment improved visibly; shoulder/sleeve separation remains approximate.
+
+## Interface controls
+
+Click **Gerar modelo 3D** or **Configurar e reprocessar** in the mask editor.
+The execution form exposes the segmentation method, dark-hair switch, and optional
+neck cut percentage (15–70%). Hair and neck controls are enabled only for v3.
+Existing runs prefill their own method; choose v3 explicitly when upgrading a v2
+run. New projects select v3. The mask details show `provenance.source`, while the
+form separately identifies the selected run's configured method.
+
+Submitting creates a new run through the existing API, preserving the prior run
+in history. It runs the pipeline, including reconstruction, on current project
+views. Unsaved mask edits must be saved first. Existing reviewed masks are not
+transferred into new proposals. Printer profile and unrelated run settings are
+preserved. Grounded SAM still requires server installation.
