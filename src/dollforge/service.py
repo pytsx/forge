@@ -116,7 +116,8 @@ class Service:
             if not {"front", "back", "left", "right"} <= {v.label for v in views}:
                 raise InvalidInput("Envie frente, costas, esquerda e direita antes de executar.")
             run = RunManifest(project_id=project_id, project_snapshot=project, views=views,
-                              config=config, replay_of=replay_id)
+                              config=config, replay_of=replay_id,
+                              learning_artifact_id=project.metadata.get("learning_artifact_id"))
             self.store.save("run", run.run_id, run)
             return run
 
@@ -357,6 +358,11 @@ class Service:
                         run, source, source.mask_artifact_id, request.reviewer
                     )
 
+                if stage.stage == Stage.SEGMENTATION and request.action in (
+                    ReviewAction.REMASK, ReviewAction.RELABEL, ReviewAction.APPROVE
+                ):
+                    self._update_project_learning(run, revised, request.reviewer)
+
                 dirty = {request.artifact_id, *propagated_dirty}
                 for node in run.stages:
                     if node is not stage and dirty.intersection(node.input_artifact_ids):
@@ -375,6 +381,41 @@ class Service:
             self.engine.put(run, Stage.REVIEW, "feedback", event,
                 [request.artifact_id] + ([after.artifact_id] if after else []), provenance=provenance)
             return event
+
+    def _update_project_learning(self, run: RunManifest, output: SegmentationResult,
+                                  reviewer: str) -> None:
+        """Persist reviewed masks as project memory for future executions."""
+        records = []
+        for observation in output.observations:
+            if not self._is_human_locked(observation):
+                continue
+            view = next(v for v in run.views if v.view_id == observation.view_id)
+            records.append({
+                "view_id": str(view.view_id), "view_label": view.label,
+                "part_class": observation.part_class, "side": observation.side,
+                "mask_artifact_id": str(observation.mask_artifact_id),
+                "bbox_xyxy": list(observation.bbox_xyxy),
+                "confidence": observation.confidence,
+                "review_state": observation.review_state,
+            })
+        if not records:
+            return
+        prior = run.learning_artifact_id
+        inherited = self.store.json(prior).get("records", []) if prior else []
+        merged = {(r["view_id"], r["part_class"], r["side"]): r for r in inherited}
+        merged.update({(r["view_id"], r["part_class"], r["side"]): r for r in records})
+        artifact = self.engine.put(
+            run, Stage.KNOWLEDGE, "project_learning", {
+                "version": 1, "project_id": str(run.project_id),
+                "revision": len(inherited) + 1, "reviewer": reviewer,
+                "records": list(merged.values()),
+            }, [r["mask_artifact_id"] for r in merged.values()],
+            provenance=Provenance(type="human_edited", source="project_online_memory",
+                                   note="Máscaras revisadas reutilizadas em execuções futuras."))
+        run.learning_artifact_id = artifact.artifact_id
+        project = self.store.get("project", run.project_id, DollProject)
+        project.metadata["learning_artifact_id"] = str(artifact.artifact_id)
+        self.store.save("project", project.project_id, project)
 
     @staticmethod
     def review_state(action: ReviewAction) -> ReviewState:

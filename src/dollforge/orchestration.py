@@ -15,6 +15,7 @@ from dollforge.contracts import (
     CameraResult,
     Check,
     ManufacturingReport,
+    MaskProposal,
     MatchingAdapter,
     MatchingRequest,
     MatchingResult,
@@ -319,6 +320,11 @@ class Engine:
             segments = []
             observations = []
             segmenter = self.segmentation_adapter(run.config.segmentation_adapter)
+            learned = {}
+            if run.learning_artifact_id:
+                memory = self.store.json(run.learning_artifact_id)
+                learned = {(r["view_label"], r["part_class"], r["side"]): r
+                           for r in memory.get("records", [])}
             for view in run.views:
                 def segment(view=view):
                     image_png = self.store.read(view.normalized_artifact_id)
@@ -347,7 +353,39 @@ class Engine:
                             ),
                             parameters=parameters,
                         )
-                        return segmenter.predict(request)
+                        proposals = segmenter.predict(request)
+                        proposal_keys = {(p.part_class, p.side) for p in proposals}
+                        for proposal in proposals:
+                            key = (view.label, proposal.part_class, proposal.side)
+                            record = learned.get(key)
+                            if not record:
+                                continue
+                            mask = self.store.read(UUID(record["mask_artifact_id"]))
+                            proposal.mask_png = mask
+                            proposal.bbox_xyxy = tuple(record["bbox_xyxy"])
+                            proposal.confidence = max(proposal.confidence, .92)
+                            proposal.provenance = Provenance(
+                                type="human_edited", source="project_online_memory",
+                                evidence=[UUID(record["mask_artifact_id"]), run.learning_artifact_id],
+                                note="Máscara humana reutilizada como ponto de partida da execução.")
+                        # A relabel made by a reviewer may not exist in the automatic
+                        # ontology. Rehydrate it from project memory instead of losing it.
+                        for record in learned.values():
+                            if record["view_label"] != view.label:
+                                continue
+                            key = (record["part_class"], record["side"])
+                            if key in proposal_keys:
+                                continue
+                            mask_id = UUID(record["mask_artifact_id"])
+                            proposals.append(MaskProposal(
+                                part_class=record["part_class"], side=record["side"],
+                                bbox_xyxy=tuple(record["bbox_xyxy"]), confidence=.92,
+                                mask_png=self.store.read(mask_id),
+                                provenance=Provenance(
+                                    type="human_edited", source="project_online_memory",
+                                    evidence=[mask_id, run.learning_artifact_id],
+                                    note="Peça e rótulo humanos reidratados da memória do projeto.")))
+                        return proposals
 
                     if run.config.quality_loop_enabled:
                         proposals, trace = run_quality_loop(
@@ -411,8 +449,11 @@ class Engine:
                         "Segmentação automática; revise limites e identidade das peças.",
                     )
                     return SegmentationResult(observations=items, warnings=[warning])
+                segment_inputs = [view.normalized_artifact_id]
+                if run.learning_artifact_id:
+                    segment_inputs.append(run.learning_artifact_id)
                 artifact = self.node(run, Stage.SEGMENTATION, str(view.view_id),
-                    [view.normalized_artifact_id], segment, segmenter.model_version, replay)
+                    segment_inputs, segment, segmenter.model_version, replay)
                 self.enforce_quality_limit(run, Stage.SEGMENTATION, str(view.view_id))
                 segments.append(artifact.artifact_id)
                 observations.extend(SegmentationResult.model_validate(

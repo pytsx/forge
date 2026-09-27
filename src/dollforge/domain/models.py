@@ -394,6 +394,7 @@ class RunManifest(DTO):
     created_at: datetime = Field(default_factory=utcnow)
     completed_at: datetime | None = None
     replay_of: UUID | None = None
+    learning_artifact_id: UUID | None = None
     error: str | None = None
     result_kind: Literal["none", "draft", "inspected"] = "none"
 
