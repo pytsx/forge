@@ -63,7 +63,7 @@ def test_real_pipeline_persists_inspection_and_gates_blender(tmp_path, block):
     for label in ("front", "back", "left", "right"):
         service.add_view(project.project_id, label, png(image))
     # Synthetic two-part case isolates S16; full segmentation quality is tested separately.
-    config = PipelineConfig(build_blender=True, matching_adapter="semantic_side_matching_v1",
+    config = PipelineConfig(segmentation_adapter="contour_rules_v2", build_blender=True, matching_adapter="semantic_side_matching_v1",
                             volumetry_resolution=32, segmentation_boundary_limit=0,
                             segmentation_coverage_limit=0, volumetry_iou_limit=.5,
                             volumetry_outside_area_limit=.2, volumetry_overshoot_px_limit=10,

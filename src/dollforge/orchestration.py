@@ -330,6 +330,10 @@ class Engine:
                         "text_threshold": .22,
                     }
 
+                    initial_parameters["split_dark_hair"] = run.config.segmentation_split_dark_hair
+                    if run.config.segmentation_neck_fraction is not None:
+                        initial_parameters["neck_fraction"] = run.config.segmentation_neck_fraction
+
                     def generate_segmentation(parameters):
                         request = SegmentationRequest(
                             view=view,
@@ -397,6 +401,8 @@ class Engine:
                             "Propostas proporcionais; revise todas as vistas.",
                         "contour_rules_v2":
                             "Máscaras seguem contorno e priors de bonecos; revise limites entre peças.",
+                        "contour_rules_v3":
+                            "Bordas competitivas e pescoço estimado; revise rótulos, cabelo e oclusões.",
                         "grounded_sam2_v1":
                             "Segmentação Grounding DINO + SAM 2; revise baixa confiança e oclusões.",
                     }

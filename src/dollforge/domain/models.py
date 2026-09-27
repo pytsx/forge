@@ -326,7 +326,7 @@ class PrintProfile(DTO):
 class PipelineConfig(DTO):
     output_mode: Literal["draft", "strict"] = "strict"
     seed: int = 42
-    segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "grounded_sam2_v1"] = "contour_rules_v2"
+    segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "contour_rules_v3", "grounded_sam2_v1"] = "contour_rules_v3"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
     perception_adapter: Literal["structured_perception_v1"] = "structured_perception_v1"
     volumetry_adapter: Literal[
@@ -340,6 +340,8 @@ class PipelineConfig(DTO):
     ] = "silhouette_volume_mesh_v1"
     volumetry_resolution: int = Field(default=64, ge=32, le=128)
     foreground_threshold: int = Field(default=32, ge=1, le=254)
+    segmentation_neck_fraction: float | None = Field(default=None, ge=.15, le=.70)
+    segmentation_split_dark_hair: bool = False
     review_threshold: Score = 0.85
     quality_loop_enabled: Literal[True] = True
     quality_max_attempts: int = Field(default=3, ge=1, le=6)
