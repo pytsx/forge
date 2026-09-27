@@ -11,3 +11,4 @@ build/
 *.blend1
 *.log
 .env
+dollforge_codex_blueprint/

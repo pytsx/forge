@@ -214,3 +214,25 @@ def test_prior_label_never_changes_visual_carving():
         observed_result.volumes[0].extents_xyz,
         prior_result.volumes[0].extents_xyz,
     )
+
+
+def test_chunked_projection_and_grid_match_dense_reference():
+    from dollforge.volumetry.projection import project_world_points
+    from dollforge.volumetry.visual_hull import _grid, _inside_mask
+
+    request = build_case()
+    center = np.array([1.25, -2.5, 3.75])
+    points, origin, voxel = _grid(center, np.array([40., 30., 60.]), 32)
+    axes = [origin[i] + np.arange(32) * voxel for i in range(3)]
+    expected_points = np.column_stack([a.ravel() for a in np.meshgrid(*axes, indexing="ij")])
+    assert np.array_equal(points, expected_points)
+    rng = np.random.default_rng(42)
+    mask = rng.random((128, 128)) > .5
+    for camera in request.cameras:
+        pixels = project_world_points(points, camera)
+        u, v = np.rint(pixels).astype(np.int64).T
+        valid = (u >= 0) & (v >= 0) & (u < 128) & (v < 128)
+        expected = np.zeros(len(points), dtype=bool)
+        expected[valid] = mask[v[valid], u[valid]]
+        for chunk_size in (1_003, 65_536):
+            assert np.array_equal(_inside_mask(points, camera, mask, chunk_size), expected)

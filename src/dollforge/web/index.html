@@ -1,34 +1,47 @@
 <!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#101716"><title>DollForge · Estúdio</title>
-  <link rel="stylesheet" href="/static/style.css"><script src="/static/segmentation-tools.js" defer></script><script src="/static/app.js" defer></script>
-</head>
-<body>
-<aside class="sidebar">
-  <a class="brand" href="/" aria-label="DollForge início"><span class="brand-icon">◈</span> dollforge<span class="brand-dot">.</span></a>
-  <div class="workspace"><span class="avatar">DF</span><div>Workspace local<small>Engenharia de personagens</small></div><span class="online"></span></div>
-  <div class="nav-label">ESTÚDIO</div>
-  <button class="nav-item active" data-tab="workspace"><span>▦</span> Projetos <span id="project-count" class="count">0</span></button>
-  <button class="nav-item" data-tab="pipeline"><span>⌘</span> Pipeline</button>
-  <button class="nav-item" data-tab="history"><span>◷</span> Revisões</button>
-  <div class="nav-label project-label">SEUS PROJETOS <button id="new-project-small" aria-label="Novo projeto">＋</button></div>
-  <div id="project-list"></div>
-  <div class="sidebar-bottom"><div class="local-status"><span class="online"></span> Processamento local</div><p>Suas imagens ficam neste computador.</p><a href="/docs" target="_blank" rel="noopener">Documentação da API ↗</a><div class="version">DOLLFORGE <span>v0.1 / BASELINE</span></div></div>
-</aside>
-<main>
-  <header class="topbar"><div><span class="muted">Workspace</span><span class="slash">/</span><span id="breadcrumb">Projetos</span></div><span class="top-status"><span class="online"></span> <span id="health">Conectando…</span></span></header>
-  <section class="page-heading"><div><div class="eyebrow">DA REFERÊNCIA À CONSTRUÇÃO</div><h1 id="project-title">Seu próximo personagem.</h1><p id="project-subtitle">Um espaço para transformar vistas em peças, com você no controle.</p></div><div class="heading-actions"><button class="button secondary" id="new-project">＋ Novo projeto</button><button class="button primary" id="run-button" disabled><span>▷</span> Executar pipeline</button></div></section>
-  <div class="metrics"><div><span class="metric-icon">▧</span><div><small>Vistas de referência</small><strong id="views-metric">0 <em>/ 4</em></strong></div></div><div><span class="metric-icon">◇</span><div><small>Peças identificadas</small><strong id="parts-metric">—</strong></div></div><div><span class="metric-icon">◎</span><div><small>Escala do projeto</small><strong id="scale-metric">Relativa</strong></div></div><div><span class="metric-icon">◷</span><div><small>Estado da execução</small><strong id="run-metric">Aguardando vistas</strong></div></div></div>
-  <nav class="tabs" aria-label="Etapas de trabalho"><button data-tab="workspace" class="active">Visão geral</button><button data-tab="segmentation">Segmentação <span id="review-count"></span></button><button data-tab="matching">Correspondências</button><button data-tab="perception">Percepção</button><button data-tab="volumetry">Volumetria</button><button data-tab="geometry">Modelo 3D</button><button data-tab="pipeline">Pipeline</button><button data-tab="history">Histórico</button></nav>
-  <div id="notice" class="notice" hidden></div>
-  <section id="tab-workspace" class="tab-panel">
-    <div class="section-title"><div><h2>Referências multi-view</h2><p>Quatro ângulos. Uma identidade consistente.</p></div><span class="tag">PNG · JPG · WEBP</span></div>
-    <div class="view-grid" id="views-grid"></div>
-    <div class="overview-bottom"><article class="panel journey"><div class="section-title"><h2>Da imagem à peça</h2><span class="tag mint">FLUXO SUPERVISIONADO</span></div><div class="journey-steps"><div><span>01</span><h3>Observe</h3><p>Importe vistas e confira a qualidade.</p></div><i>→</i><div><span>02</span><h3>Refine</h3><p>Revise máscaras e conecte identidades.</p></div><i>→</i><div><span>03</span><h3>Construa</h3><p>Inspecione as peças e abra no Blender.</p></div></div></article><article class="panel project-note"><span class="note-icon">⌁</span><h2>Construído para ser revisado.</h2><p>As propostas iniciais são aproximações geométricas. Cada ajuste seu cria uma nova versão, preservando a origem.</p><button class="text-button" data-tab="pipeline">Explorar pipeline <span>↗</span></button></article></div>
-  </section>
-  <section id="tab-segmentation" class="tab-panel" hidden>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#181b20"><title>DollForge ? Bancada 3D</title>
+<link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/workbench.css">
+<script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
+<script src="/static/segmentation-tools.js" defer></script><script src="/static/app.js" defer></script>
+<script type="module" src="/static/workbench.js"></script>
+</head><body class="workbench">
+<header class="app-bar"><a class="app-logo" href="/">? <b>DollForge</b><span>BANCADA 3D</span></a><span class="bar-divider"></span><span id="project-title">Novo projeto</span><span id="breadcrumb" hidden></span><span id="project-subtitle" hidden></span><div class="bar-spacer"></div><span id="health" class="muted">Conectando?</span><button id="new-project" class="button secondary small">? Projeto</button><button id="download" class="button secondary small" disabled>? Pacote 3D</button><button id="run-button" class="button primary small" disabled>? Gerar pr?via 3D</button></header>
+<div class="bench-layout">
+<aside class="scene-sidebar"><div class="dock-heading">EXPLORADOR <span>LOCAL</span></div>
+<details class="project-switch" open><summary>Projetos <span id="project-count">0</span></summary><div id="project-list"></div></details>
+<div class="dock-heading">REFER?NCIAS <span id="views-metric">0 / 4</span></div><div id="views-grid"></div>
+<div class="dock-heading">OBJETOS <span id="parts-metric">?</span></div><div id="scene-parts"><p class="muted">As pe?as aparecer?o durante a reconstru??o.</p></div>
+<div class="scene-sidebar-bottom"><span class="online"></span> Dados neste computador<a href="/docs" target="_blank" rel="noopener">API ?</a></div></aside>
+<main class="scene-workspace">
+<div class="viewport-tools"><div class="tool-group"><button data-camera="orbit" class="active" title="Vista livre">Perspectiva</button><button data-camera="front">Frente</button><button data-camera="back">Costas</button><button data-camera="left">Esquerda</button><button data-camera="right">Direita</button><button data-camera="top">Topo</button></div><div class="bar-spacer"></div><button id="frame-scene" title="Enquadrar cena (F)">? Enquadrar</button></div>
+<div id="scene-host"><canvas id="geometry-canvas" tabindex="0" aria-label="Espa?o 3D: arraste para orbitar, bot?o direito para mover e roda para aproximar"></canvas><div id="scene-labels" aria-hidden="true"></div>
+<div class="viewport-caption"><span class="live-dot"></span> <span id="scene-mode">REFER?NCIAS</span><small id="scene-registration">Posicionamento inicial</small></div>
+<div class="viewport-legend"><span class="legend-image">Imagem</span><span class="legend-contour">Contorno</span><span class="legend-bounds">Limites</span></div>
+<div id="scene-empty"><span>?</span><h2>Sua bancada de reconstru??o.</h2><p>Crie um projeto e importe as quatro vistas.<br>Refer?ncias, contornos e pe?as ocupar?o este mesmo espa?o.</p><button class="button secondary" id="new-project-small">? Criar projeto</button></div>
+<div id="viewport-error" role="alert" hidden></div><div id="scene-loading" hidden>Carregando refer?ncias?</div>
+<div class="viewport-help">Arrastar: orbitar ? Direito: mover ? Roda: zoom ? F: enquadrar</div><span id="geometry-unit">ESCALA RELATIVA</span></div>
+<div id="notice" class="notice" hidden></div>
+<section class="process-dock" id="tab-pipeline"><div class="process-heading"><strong>PROCESSO</strong><span id="run-metric">Aguardando vistas</span><div class="bar-spacer"></div><select id="run-select" aria-label="Execu??o selecionada"></select><button id="replay" class="button secondary small" disabled>? Reproduzir</button></div><div id="pipeline-content">Importe as quatro vistas para iniciar.</div></section>
+</main>
+<aside class="property-sidebar"><div class="dock-heading">PROPRIEDADES <span id="scale-metric">Relativa</span></div>
+<nav class="inspector-tabs" aria-label="Pain?is de inspe??o"><button data-tab="workspace" class="active">Cena</button><button data-tab="geometry">Qualidade</button><button data-tab="volumetry">Volume</button><button data-tab="matching">Pe?as</button><button data-tab="perception">Percep??o</button><button data-tab="history">Hist?rico</button></nav>
+<div class="property-content"><section id="tab-workspace" class="tab-panel">
+<h2>Camadas da cena</h2><p class="muted">Acompanhe a constru??o sem perder as refer?ncias.</p>
+<div class="layer-controls">
+<label><input type="checkbox" data-layer="images" checked> Imagens de refer?ncia</label><label><input type="checkbox" data-layer="contours" checked> Contornos das m?scaras</label><label><input type="checkbox" data-layer="masks"> ?reas segmentadas</label><label><input type="checkbox" data-layer="bounds" checked> Limites das pe?as</label><label><input type="checkbox" data-layer="meshes" checked> Superf?cies 3D</label><label><input type="checkbox" data-layer="wireframe"> Arestas da malha</label><label><input type="checkbox" data-layer="grid" checked> Grade e eixos</label>
+</div><label class="range-label">Opacidade das imagens <input id="reference-opacity" type="range" min="0" max="100" value="55"></label><label class="range-label">Afastamento das vistas <input id="reference-distance" type="range" min="0" max="150" value="65"></label>
+<div id="selection-info" class="selection-info"><h3>Sele??o</h3><p>Clique em uma pe?a ou refer?ncia na cena.</p></div>
+<button data-tab="segmentation" class="button secondary full">? Editar m?scaras <span id="review-count"></span></button><p class="muted">Edi??es s?o salvas como novas vers?es. A pr?via n?o representa aprova??o para fabrica??o.</p></section>
+<section id="tab-geometry" class="tab-panel" hidden><h2>Inspe??o por pe?a</h2><div id="validation" class="checks"></div><button id="final-review" class="button secondary full" disabled>Avalia??o final</button></section>
+<section id="tab-matching" class="tab-panel" hidden><div class="section-title"><div><h2>Uma peça, múltiplas vistas</h2><p>Selecione uma identidade para conferir suas observações.</p></div><button id="approve-matches" class="button secondary">Aprovar correspondências</button></div><div id="matching-content" class="panel padded empty-text">Execute o pipeline para conectar as peças.</div></section>
+<section id="tab-perception" class="tab-panel" hidden><div class="section-title"><div><h2>Leitura estruturada do personagem</h2><p>O que foi observado nas imagens, o que foi combinado entre vistas e o que ainda é hipótese.</p></div><span class="tag mint">ANTES DA VOLUMETRIA</span></div><div id="perception-content" class="panel padded empty-text">Execute o pipeline para gerar o Perception Graph.</div></section>
+<section id="tab-volumetry" class="tab-panel" hidden><div class="section-title"><div><h2>Reconstrução volumétrica calibrada</h2><p>As quatro vistas compartilham escala, origem e projeção antes do carving voxelado.</p></div><span class="tag mint">VISUAL HULL + SDF</span></div><div id="volumetry-content" class="panel padded empty-text">Execute o pipeline para gerar volumes por peça.</div></section>
+<section id="tab-history" class="tab-panel" hidden><div class="section-title"><div><h2>Histórico de revisão</h2><p>Correções e aprovações preservadas como eventos.</p></div><span class="tag">APPEND-ONLY</span></div><div id="history-content" class="panel padded empty-text">Nenhuma revisão registrada.</div></section>
+</div></aside></div>
+<footer class="app-status"><span>RH ? Z ? ? Frente ?Y</span><span id="scene-stats">0 pe?as ? 0 tri?ngulos</span><div class="bar-spacer"></div><span>RECONSTRU??O SUPERVISIONADA</span></footer>
+<dialog id="mask-dialog"><div class="mask-dialog-heading"><strong>EDITOR DE M?SCARAS</strong><button id="close-mask-editor" class="button secondary small">Voltar ? cena ?</button></div><section id="tab-segmentation">
     <div class="section-title"><div><h2>Revisão de segmentação</h2><p>Esquerda e direita são sempre do personagem.</p></div><select id="seg-view" aria-label="Vista para revisar"></select></div>
     <div class="editor-grid"><article class="panel canvas-panel"><div class="editor-toolbar smart-toolbar">
       <div class="tool-row primary-tools">
@@ -53,17 +66,26 @@
         <button id="undo-mask">↶ Desfazer</button>
       </div>
     </div><div class="canvas-wrap"><canvas id="mask-canvas" aria-label="Editor de máscara"></canvas><div id="mask-empty" class="empty-overlay">Execute o pipeline para revisar as máscaras.</div></div><div class="canvas-footer"><span id="mask-info">Selecione uma peça para editar</span><button id="save-mask" class="button primary small" disabled>Salvar correção</button></div></article><article class="panel inspector"><div class="inspector-heading"><h2>Peças da vista</h2><span id="observation-count" class="tag">0</span></div><div id="observations" class="observations"></div><div id="part-details"></div></article></div>
-  </section>
-  <section id="tab-matching" class="tab-panel" hidden><div class="section-title"><div><h2>Uma peça, múltiplas vistas</h2><p>Selecione uma identidade para conferir suas observações.</p></div><button id="approve-matches" class="button secondary">Aprovar correspondências</button></div><div id="matching-content" class="panel padded empty-text">Execute o pipeline para conectar as peças.</div></section>
-  <section id="tab-perception" class="tab-panel" hidden><div class="section-title"><div><h2>Leitura estruturada do personagem</h2><p>O que foi observado nas imagens, o que foi combinado entre vistas e o que ainda é hipótese.</p></div><span class="tag mint">ANTES DA VOLUMETRIA</span></div><div id="perception-content" class="panel padded empty-text">Execute o pipeline para gerar o Perception Graph.</div></section>
-  <section id="tab-volumetry" class="tab-panel" hidden><div class="section-title"><div><h2>Reconstrução volumétrica calibrada</h2><p>As quatro vistas compartilham escala, origem e projeção antes do carving voxelado.</p></div><span class="tag mint">VISUAL HULL + SDF</span></div><div id="volumetry-content" class="panel padded empty-text">Execute o pipeline para gerar volumes por peça.</div></section>
-  <section id="tab-geometry" class="tab-panel" hidden><div class="section-title"><div><h2>Montagem 3D</h2><p>Arraste para girar. Role para aproximar. Superfície reconstruída a partir do volume multi-view.</p></div><button id="download" class="button primary">↓ Exportar pacote</button></div><div class="editor-grid"><article class="panel geometry-panel"><canvas id="geometry-canvas" aria-label="Visualização 3D interativa"></canvas><span class="viewport-label">PERSPECTIVA <span>· Z ↑ · FRENTE −Y</span></span><span id="geometry-unit" class="viewport-unit">ESCALA RELATIVA</span></article><article class="panel inspector"><h2>Validação</h2><div id="validation" class="checks"><p class="muted">Nenhuma geometria gerada.</p></div><button id="final-review" class="button secondary full">Avaliação final</button></article></div></section>
-  <section id="tab-pipeline" class="tab-panel" hidden><div class="section-title"><div><h2>Pipeline de reconstrução</h2><p>Entradas, versões e resultados rastreáveis em cada etapa.</p></div><div class="inline"><select id="run-select" aria-label="Execução selecionada"></select><button id="replay" class="button secondary">↻ Reproduzir run</button></div></div><div id="pipeline-content" class="panel padded empty-text">Importe as quatro vistas para iniciar.</div></section>
-  <section id="tab-history" class="tab-panel" hidden><div class="section-title"><div><h2>Histórico de revisão</h2><p>Correções e aprovações preservadas como eventos.</p></div><span class="tag">APPEND-ONLY</span></div><div id="history-content" class="panel padded empty-text">Nenhuma revisão registrada.</div></section>
-  <footer>Precisão é um processo.<span>LOCAL FIRST <i>·</i> HUMAN IN THE LOOP</span></footer>
-</main>
+  </section></dialog>
 <dialog id="project-dialog"><form id="project-form"><div class="eyebrow">UM NOVO COMEÇO</div><h2>Criar projeto</h2><p>Organize as vistas de um mesmo personagem.</p><label>Nome do projeto<input name="name" required maxlength="120" placeholder="Ex.: Explorador — protótipo 01" autofocus></label><label>Família de estilo <span>opcional</span><input name="style_family" placeholder="Ex.: coleção exploradores"></label><label>Altura real em milímetros <span>opcional</span><input name="known_height_mm" type="number" min="0.1" step="any" placeholder="Sem medida? A escala será relativa."></label><div class="dialog-actions"><button type="button" class="button secondary" id="cancel-project">Cancelar</button><button class="button primary" type="submit">Criar projeto →</button></div></form></dialog>
 <dialog id="feedback-dialog"><form id="feedback-form"><div class="eyebrow">REVISÃO HUMANA</div><h2>Avaliação final</h2><p>Avalie cada dimensão de 0 a 1. As notas não aprovam a fabricação.</p><div id="score-fields" class="score-fields"></div><label>Revisor<input name="reviewer" required value="Revisor local"></label><label>Observação<textarea name="comment" rows="2"></textarea></label><div class="dialog-actions"><button type="button" class="button secondary" id="cancel-feedback">Cancelar</button><button class="button primary">Salvar avaliação</button></div></form></dialog>
-<input id="file-upload" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-<div id="toast" role="status" hidden></div>
+<dialog id="print-dialog"><form id="print-form">
+  <div class="eyebrow">IMPRESSÃO 3D E PROTOTIPAGEM</div><h2>Critérios desta execução</h2>
+  <p>Os limites ficam registrados junto ao resultado. Verificações não configuradas aparecem como pendentes.</p>
+  <label>Objetivo<select name="output_mode"><option value="draft">Pr?via 3D ? continuar com problemas sinalizados</option><option value="strict">Inspe??o rigorosa ? parar ao falhar um crit?rio</option></select></label><label>Nome do perfil<input name="name" required maxlength="120" value="Prototipagem 3D"></label>
+  <label>Processo<select name="process"><option value="unspecified">A definir</option><option value="fdm">FDM / FFF</option><option value="sla">SLA / resina</option><option value="sls">SLS</option></select></label>
+  <label>Material <span>opcional</span><input name="material" maxlength="120" placeholder="Material utilizado na impressão"></label>
+  <label>Voxel máximo em mm <span>opcional</span><input name="max_voxel_size_mm" type="number" min="0.000001" step="any" placeholder="Limite da discretização da reconstrução"></label>
+  <p>O tamanho do voxel não comprova precisão dimensional. A escala física requer a altura real do projeto.</p>
+  <fieldset><legend>Volume útil da impressora em mm <span>opcional; preencha os três eixos</span></legend>
+    <label>X<input name="build_x" type="number" min="0.000001" step="any"></label>
+    <label>Y<input name="build_y" type="number" min="0.000001" step="any"></label>
+    <label>Z<input name="build_z" type="number" min="0.000001" step="any"></label>
+  </fieldset>
+  <label>Resolução da reconstrução por eixo<input name="resolution" type="number" min="32" max="128" step="1" value="64" required></label>
+  <p>Uma resolução maior usa mais memória e tempo. O ajuste automático pode aumentá-la até 128.</p>
+  <div class="dialog-actions"><button type="button" class="button secondary" id="cancel-print">Cancelar</button><button class="button primary" type="submit">Executar inspeção e reconstrução</button></div>
+</form></dialog>
+
+<input id="file-upload" type="file" accept="image/png,image/jpeg,image/webp" hidden><div id="toast" role="status" hidden></div>
 </body></html>

@@ -311,7 +311,20 @@ class Artifact(DTO):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class PrintProfile(DTO):
+    """Operator-specified screening limits, not a qualified printing process."""
+
+    name: str = Field(default="Prototipagem 3D", min_length=1, max_length=120)
+    process: Literal["unspecified", "fdm", "sla", "sls"] = "unspecified"
+    material: str | None = Field(default=None, max_length=120)
+    build_volume_mm: tuple[Positive, Positive, Positive] | None = None
+    max_voxel_size_mm: Positive | None = None
+    max_faces_per_part: int = Field(default=1_000_000, ge=4, le=10_000_000)
+    require_single_shell: bool = True
+
+
 class PipelineConfig(DTO):
+    output_mode: Literal["draft", "strict"] = "strict"
     seed: int = 42
     segmentation_adapter: Literal["silhouette_rules_v1", "contour_rules_v2", "grounded_sam2_v1"] = "contour_rules_v2"
     matching_adapter: Literal["semantic_side_matching_v1", "multisignal_v1"] = "multisignal_v1"
@@ -342,6 +355,7 @@ class PipelineConfig(DTO):
     retrain_on_limit_exhaustion: Literal[True] = True
     build_blender: bool = True
     cache: bool = True
+    print_profile: PrintProfile = Field(default_factory=PrintProfile)
 
 
 class StageResult(DTO):
@@ -363,6 +377,7 @@ class StageResult(DTO):
     quality_trace_artifact_id: UUID | None = None
     training_signal_artifact_id: UUID | None = None
     error: str | None = None
+    progress_message: str = ""
 
 
 class RunManifest(DTO):
@@ -378,6 +393,7 @@ class RunManifest(DTO):
     completed_at: datetime | None = None
     replay_of: UUID | None = None
     error: str | None = None
+    result_kind: Literal["none", "draft", "inspected"] = "none"
 
 
 class ReviewAction(StrEnum):

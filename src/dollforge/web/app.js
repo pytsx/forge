@@ -24,7 +24,12 @@ async function api(path, options={}) {
 }
 function toast(message,error=false){const el=$('#toast');el.textContent=message;el.className=error?'error':'';el.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.hidden=true,6000);}
 async function action(fn){try{await fn();}catch(e){toast(e.message,true);}}
-const content = id => api('/artifacts/'+id+'/content');
+const contentCache = new Map();
+let selectionRevision=0, projectRevision=0;
+const content = id => {
+  if(!contentCache.has(id))contentCache.set(id,api('/artifacts/'+id+'/content').catch(error=>{contentCache.delete(id);throw error;}));
+  return contentCache.get(id);
+};
 const artifactUrl = id => '/api/artifacts/'+id+'/content';
 const partName = p => `${names[p.class]||p.class} · ${sides[p.side]||p.side}`;
 const currentSegment = () => state.segments.find(s=>s.view_id===state.activeView);
@@ -42,33 +47,42 @@ async function loadProjects(selectId){
   else render();
 }
 async function selectProject(id){
+  const revision=++projectRevision;
+  ++selectionRevision;contentCache.clear();
   clearTimeout(pollTimer);
   state.project=state.projects.find(p=>p.project_id===id)||state.projects[0];
   localStorage.setItem('dollforge.project',state.project.project_id);
-  state.views=await api(`/projects/${state.project.project_id}/views`);
-  state.runs=await api(`/projects/${state.project.project_id}/runs`);
+  const [views,runs]=await Promise.all([api(`/projects/${state.project.project_id}/views`),api(`/projects/${state.project.project_id}/runs`)]);
+  if(revision!==projectRevision)return;
+  state.views=views;state.runs=runs;
   state.activeView=state.views.find(v=>v.label==='front')?.view_id||state.views[0]?.view_id;
   state.selected=null;
   await selectRun(state.runs[0]||null);
   render();
 }
 async function selectRun(run){
-  state.run=run;state.segments=[];state.matches=null;state.graph=null;state.perception=null;state.calibration=null;state.volumetry=null;state.reconstruction=null;state.report=null;state.meshes=[];
+  const revision=++selectionRevision;
+  clearTimeout(pollTimer);
+  if(state.run?.run_id!==run?.run_id)contentCache.clear();
+  const next={run,segments:[],matches:null,graph:null,perception:null,calibration:null,volumetry:null,reconstruction:null,report:null,meshes:[]};
   if(run){
     const outputs=await Promise.all(run.stages.filter(s=>s.output_artifact_id&&!s.invalidated).map(async s=>({stage:s,data:await content(s.output_artifact_id)})));
     for(const {stage:s,data} of outputs){
-      if(s.stage==='S05')state.segments.push({...data,artifact_id:s.output_artifact_id,view_id:data.observations[0]?.view_id});
-      if(s.stage==='S06')state.matches={...data,artifact_id:s.output_artifact_id};
-      if(s.stage==='S07C')state.calibration={...data,artifact_id:s.output_artifact_id};
-      if(s.stage==='S08')state.graph={...data,artifact_id:s.output_artifact_id};
-      if(s.stage==='S09')state.perception={...data,artifact_id:s.output_artifact_id};
-      if(s.stage==='S09V')state.volumetry={...data,artifact_id:s.output_artifact_id};
-      if(s.stage==='S10')state.reconstruction=data;
-      if(s.stage==='S16')state.report=data;
+      if(s.stage==='S05')next.segments.push({...data,artifact_id:s.output_artifact_id,view_id:data.observations[0]?.view_id});
+      if(s.stage==='S06')next.matches={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S07C')next.calibration={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S08')next.graph={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S09')next.perception={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S09V')next.volumetry={...data,artifact_id:s.output_artifact_id};
+      if(s.stage==='S10')next.reconstruction=data;
+      if(s.stage==='S16')next.report=data;
     }
-    if(state.reconstruction)state.meshes=await Promise.all(state.reconstruction.meshes.map(m=>content(m.preview_artifact_id)));
+    if(next.reconstruction)next.meshes=await Promise.all(next.reconstruction.meshes.map(m=>content(m.preview_artifact_id)));
+    if(revision!==selectionRevision)return;
     if(['queued','running'].includes(run.status))pollTimer=setTimeout(()=>action(pollRun),1200);
   }
+  if(revision!==selectionRevision)return;
+  Object.assign(state,next);
   render();
   if(state.tab==='segmentation')await loadMask();
   if(state.tab==='history')await renderHistory();
@@ -76,7 +90,9 @@ async function selectRun(run){
 }
 async function pollRun(){
   if(!state.run)return;
-  const run=await api('/runs/'+state.run.run_id);
+  const id=state.run.run_id, project=state.project.project_id;
+  const run=await api('/runs/'+id);
+  if(state.run?.run_id!==id||state.project.project_id!==project)return;
   await selectRun(run);
   if(!['queued','running'].includes(run.status)){
     state.runs=await api(`/projects/${state.project.project_id}/runs`);
@@ -86,12 +102,22 @@ async function pollRun(){
   }
 }
 function setTab(tab){
+  if(tab==='segmentation'){$('#mask-dialog').showModal();action(loadMask);return;}
+  if(tab==='pipeline'){draw3D();return;}
   state.tab=tab;
   $$('.tab-panel').forEach(p=>p.hidden=p.id!=='tab-'+tab);
   $$('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
-  if(tab==='segmentation')action(loadMask);
   if(tab==='history')action(renderHistory);
   if(tab==='geometry')requestAnimationFrame(draw3D);
+}
+function renderReferences(){
+  const views=state.run?.views?.length?state.run.views:state.views;
+  const historic=state.run&&JSON.stringify([...state.run.project_snapshot.views].sort())!==JSON.stringify([...state.project.views].sort());
+  $('#views-grid').innerHTML=Object.entries(labels).map(([label,name])=>{
+    const view=views.find(v=>v.label===label),id=view?.view_id;
+    const visible=!window.forgeViewport?.hiddenViews.has(id);
+    return `<div class="reference-row ${id===state.activeView?'active':''}"><input type="checkbox" data-view-visible="${id||''}" aria-label="Mostrar ${name}" ${visible?'checked':''} ${!view?'disabled':''}><button class="reference-thumb" ${view?`data-scene-view="${id}"`:`data-upload="${label}"`} ${!state.project?'disabled':''}>${view?`<img src="${artifactUrl(view.normalized_artifact_id)}" alt="${name}">`:'＋'}</button><button class="reference-title" ${view?`data-scene-view="${id}"`:`data-upload="${label}"`} ${!state.project?'disabled':''}>${name}<small>${view?`${view.qa.width} × ${view.qa.height}${historic?' · histórico':''}`:'Importar referência'}</small></button><button class="reference-upload" data-upload="${label}" title="Importar ou substituir ${name}" ${!state.project?'disabled':''}>＋</button></div>`;
+  }).join('');
 }
 function render(){
   const project=state.project,run=state.run;
@@ -104,16 +130,13 @@ function render(){
   $('#scale-metric').textContent=project?.known_height_mm?`${project.known_height_mm} mm`:'Relativa';
   $('#run-metric').textContent=run?states[run.status]:(state.views.length===4?'Pronto para executar':'Aguardando vistas');
   $('#run-button').disabled=!project||state.views.length<4||['queued','running'].includes(run?.status);
-  $('#run-button').innerHTML=['queued','running'].includes(run?.status)?'◌ Processando…':'▷ Executar pipeline';
+  $('#run-button').innerHTML=['queued','running'].includes(run?.status)?'◌ Processando…':'▷ Gerar modelo 3D';
   $('#review-count').textContent=state.segments.reduce((a,s)=>a+s.observations.filter(o=>o.review_state!=='approved').length,0)||'';
   const invalid=run?.stages.some(s=>s.invalidated);
   const changedInputs=run&&JSON.stringify([...run.project_snapshot.views].sort())!==JSON.stringify([...project.views].sort());
   const note=run?.error||(invalid?'Há correções salvas. Execute o pipeline para atualizar apenas as etapas dependentes.':changedInputs?'As vistas foram alteradas após esta execução. Execute o pipeline para usar as novas imagens.':'');
   $('#notice').hidden=!note;$('#notice').textContent=note;
-  $('#views-grid').innerHTML=Object.entries(labels).map(([label,name],i)=>{
-    const view=state.views.find(v=>v.label===label);
-    return `<article class="view-card"><div class="view-card-top"><span>${String(i+1).padStart(2,'0')} <span class="muted">/</span> ${name}</span><small>${view?'● Importada':'○ Pendente'}</small></div><button class="view-image" data-upload="${label}" aria-label="Importar vista ${name}" ${!project?'disabled':''}>${view?`<img src="${artifactUrl(view.normalized_artifact_id)}" alt="Vista ${name}">`:`<span class="upload-symbol">＋</span><strong>Adicionar ${name.toLowerCase()}</strong><small>Clique para selecionar uma imagem</small>`}</button><div class="view-card-bottom"><span>${view?`${view.qa.width} × ${view.qa.height} px`:'VISTA OBRIGATÓRIA'}</span><button data-upload="${label}" ${!project?'disabled':''}>${view?'Substituir ↗':'Importar ↗'}</button></div></article>`;
-  }).join('');
+  renderReferences();
   const viewOptions=(run?.views.length?run.views:state.views);
   $('#seg-view').innerHTML=viewOptions.map(v=>`<option value="${v.view_id}" ${v.view_id===state.activeView?'selected':''}>${esc(labels[v.label]||v.label)}</option>`).join('');
   if(!viewOptions.some(v=>v.view_id===state.activeView))state.activeView=viewOptions[0]?.view_id;
@@ -122,6 +145,7 @@ function render(){
   $('#download').disabled=!run||invalid||['queued','running'].includes(run.status);
   $('#replay').disabled=!run||invalid||['queued','running'].includes(run.status);
   $('#final-review').disabled=!node('S16')||invalid;
+  draw3D();
 }
 function renderPipeline(){
   if(!state.run){$('#pipeline-content').innerHTML='Importe as quatro vistas para iniciar.';return;}
@@ -137,8 +161,9 @@ function renderPipeline(){
     const retrain=s.training_signal_artifact_id
       ?`<a href="${artifactUrl(s.training_signal_artifact_id)}" target="_blank" rel="noopener">Sinal de retreino ↗</a>`
       :'';
-    return `<div class="pipeline-row"><span class="stage-number">${s.stage}</span><div>${stageNames[s.stage]||s.stage}<p>${s.stage==='S05'?esc(labels[state.run.views.find(v=>s.node_id.includes(v.view_id))?.label]||''):''} ${s.cached?'Reutilizado do cache · ':''}${s.output_artifact_id?.slice(0,8)||'Processando'}</p>${quality}${s.error?`<p>${esc(s.error)}</p>`:''}</div><span class="status ${s.invalidated?'warn':s.status==='failed'?'failed':''}">${s.invalidated?'↻ Reprocessar':states[s.status]}</span><div class="pipeline-links">${s.output_artifact_id?`<a href="${artifactUrl(s.output_artifact_id)}" target="_blank" rel="noopener">Contrato ↗</a>`:''}${trace}${retrain}</div></div>`;
+    return `<div class="pipeline-row"><span class="stage-number">${s.stage}</span><div>${stageNames[s.stage]||s.stage}<p>${s.stage==='S05'?esc(labels[state.run.views.find(v=>s.node_id.includes(v.view_id))?.label]||''):''} ${s.cached?'Reutilizado do cache · ':''}${esc(s.progress_message||s.output_artifact_id?.slice(0,8)||'Processando')}</p>${quality}${s.error?`<p>${esc(s.error)}</p>`:''}</div><span class="status ${s.invalidated?'warn':s.status==='failed'?'failed':''}">${s.invalidated?'↻ Reprocessar':s.quality_status==='retrain_candidate'?'Requer revisão':states[s.status]}</span><div class="pipeline-links">${s.output_artifact_id?`<a href="${artifactUrl(s.output_artifact_id)}" target="_blank" rel="noopener">Contrato ↗</a>`:''}${trace}${retrain}</div></div>`;
   }).join('')||'Execução na fila…';
+  if(['queued','running'].includes(state.run.status))$('#pipeline-content').lastElementChild?.scrollIntoView({block:'nearest'});
 }
 function renderObservations(){
   const segment=currentSegment();
@@ -342,12 +367,16 @@ function renderVolumetry(){
 
 function renderValidation(){
   if(!state.report){$('#validation').innerHTML='<p class="muted">Nenhuma geometria gerada.</p>';return;}
-  const checks=Object.groupBy?Object.groupBy(state.report.checks,c=>c.code):state.report.checks.reduce((a,c)=>((a[c.code]??=[]).push(c),a),{});
-  const titles={manifold:'Malha fechada',normals:'Normais orientadas',nonzero_faces:'Faces não degeneradas',physical_scale:'Escala física',scale_calibration:'Calibração multi-view',multiview_consistency:'Consistência multi-view',wall_thickness:'Espessura de parede',clearance:'Folgas',collisions:'Colisões',joint_range:'Articulações',separability:'Separabilidade'};
-  $('#validation').innerHTML='<p class="check-intro">Revisão necessária. Este baseline ainda não está validado para fabricação.</p>'+Object.entries(checks).map(([key,items])=>{
-    const ok=items.every(c=>c.status==='pass'),fail=items.some(c=>c.status==='fail');
-    return `<div class="check-row"><span>${titles[key]||key}</span><span class="${ok?'pass':'warn'}">${ok?'✓ Verificado':fail?'✕ Falhou':items[0].status==='not_evaluated'?'Não avaliado':'Revisar'}</span></div>`;
-  }).join('');
+  const report=state.report,parts=report.parts||[];
+  const titles={mesh_presence:'Presença de peças',unique_parts:'Identidades únicas',part_coverage:'Completude da montagem',missing_part:'Peça ausente',mesh_data:'Integridade dos dados',mesh_budget:'Complexidade da malha',duplicate_faces:'Faces duplicadas',connected_shells:'Componentes por peça',build_volume:'Volume útil da impressora',voxel_resolution:'Resolução física',manifold:'Arestas fechadas',normals:'Normais orientadas',nonzero_faces:'Faces não degeneradas',physical_scale:'Escala física',scale_calibration:'Calibração multi-view',multiview_consistency:'Consistência multi-view',wall_thickness:'Espessura de parede',clearance:'Folgas',collisions:'Colisões',joint_range:'Articulações',separability:'Separabilidade',self_intersections:'Autointerseções',dimensional_accuracy:'Precisão dimensional',print_process:'Validação do processo'};
+  const failed=report.checks.filter(c=>c.status==='fail').length;
+  const pending=report.checks.filter(c=>['not_evaluated','warn'].includes(c.status)).length;
+  const ordered=[...report.checks].sort((a,b)=>({fail:0,warn:1,not_evaluated:2,pass:3}[a.status]??2)-({fail:0,warn:1,not_evaluated:2,pass:3}[b.status]??2));
+  $('#validation').innerHTML=`<p class="check-intro"><strong>${failed?'Geometria bloqueada':'Inspeção geométrica concluída'}</strong><br>${failed} falha(s) · ${pending} verificação(ões) pendente(s). Sem liberação para fabricação.</p>${report.print_profile?`<p class="muted">Perfil: ${esc(report.print_profile.name)} · ${esc(report.print_profile.process)}</p>`:''}`+ordered.map(c=>{
+    const part=parts.find(p=>p.part_instance_id===c.part_instance_id);
+    const label=part?.name||c.part_instance_id?.slice(0,8)||'Montagem';
+    return `<details class="inspection-check"><summary><span>${esc(titles[c.code]||c.code)}<small>${esc(label)}</small></span><span class="${c.status==='pass'?'pass':'warn'}">${{pass:'✓ Verificado',fail:'✕ Falhou',warn:'Revisar',not_evaluated:'Pendente'}[c.status]||esc(c.status)}</span></summary><p>${esc(c.message)}</p></details>`;
+  }).join('')+parts.map(p=>`<div class="inspection-part"><strong>${esc(p.name)}</strong><p>${p.face_count.toLocaleString('pt-BR')} faces · ${p.shell_count??'—'} componente(s)</p>${p.extents_mm?`<p>XYZ: ${p.extents_mm.map(x=>x.toFixed(3)).join(' × ')} mm</p>`:''}${p.volume_mm3!=null?`<p>Volume geométrico: ${p.volume_mm3.toFixed(3)} mm³</p>`:''}</div>`).join('');
   $('#geometry-unit').textContent=state.reconstruction?.unit==='mm'?'UNIDADES: MILÍMETROS':'ESCALA RELATIVA · ALTURA = 1';
 }
 async function renderHistory(){
@@ -356,21 +385,9 @@ async function renderHistory(){
   $('#history-content').innerHTML=events.length?events.map(e=>`<article class="history-row"><time>${new Date(e.created_at).toLocaleString('pt-BR')}</time><div><strong>${esc(e.action)}</strong> <span class="muted">· ${esc(e.reviewer)}</span><p>${esc(e.reason_code)} · ${e.stage} · ${e.target.slice(0,8)}</p>${e.comment?`<p>${esc(e.comment)}</p>`:''}<a class="text-button" href="${artifactUrl(e.before_artifact_id)}" target="_blank" rel="noopener">Versão anterior ↗</a>${e.after_artifact_id?` <a class="text-button" href="${artifactUrl(e.after_artifact_id)}" target="_blank" rel="noopener">Nova versão ↗</a>`:''}</div></article>`).join(''):'Nenhuma revisão registrada. As correções aparecerão aqui.';
 }
 
-let rotation=.5, tilt=.12, zoom=1, dragging=null;
-function draw3D(){
-  const canvas=$('#geometry-canvas'),box=canvas.getBoundingClientRect();if(!box.width)return;
-  const ratio=window.devicePixelRatio||1;canvas.width=box.width*ratio;canvas.height=box.height*ratio;
-  const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);const w=box.width,h=box.height;
-  const height=state.graph?.scale.canonical_height||1,scale=Math.min(w*.8,h*.76)/height*zoom;
-  function project(v){let x=v[0]*Math.cos(rotation)-v[1]*Math.sin(rotation),y=v[0]*Math.sin(rotation)+v[1]*Math.cos(rotation),z=v[2];return [w/2+x*scale,h*.55-(z*Math.cos(tilt)-y*Math.sin(tilt))*scale,y*Math.cos(tilt)+z*Math.sin(tilt)];}
-  ctx.lineWidth=1;ctx.strokeStyle='#344b3b';
-  for(let i=-5;i<=5;i++)for(let axis=0;axis<2;axis++){const a=project(axis?[i*height/10,-height*.6,-height*.46]:[-height*.6,i*height/10,-height*.46]),b=project(axis?[i*height/10,height*.6,-height*.46]:[height*.6,i*height/10,-height*.46]);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}
-  const faces=[];
-  state.meshes.forEach((mesh,index)=>{const vertices=mesh.vertices.map(project);mesh.faces.forEach(f=>{const v=f.map(i=>vertices[i]);const normal=(v[1][0]-v[0][0])*(v[2][1]-v[0][1])-(v[1][1]-v[0][1])*(v[2][0]-v[0][0]);faces.push({v,depth:v.reduce((a,p)=>a+p[2],0)/3,index,shade:Math.min(1,Math.abs(normal)/40)});});});
-  faces.sort((a,b)=>b.depth-a.depth);
-  for(const f of faces){const base=colors[f.index%colors.length];ctx.fillStyle=base;ctx.beginPath();ctx.moveTo(f.v[0][0],f.v[0][1]);ctx.lineTo(f.v[1][0],f.v[1][1]);ctx.lineTo(f.v[2][0],f.v[2][1]);ctx.closePath();ctx.fill();ctx.fillStyle=`rgba(10,25,14,${.08+f.shade*.28})`;ctx.fill();ctx.strokeStyle='#17332025';ctx.lineWidth=.35;ctx.stroke();}
-  if(!state.meshes.length){ctx.fillStyle='#93a78b';ctx.textAlign='center';ctx.font='12px Segoe UI';ctx.fillText('Execute o pipeline para construir sua primeira montagem.',w/2,h*.44);}
-}
+function draw3D(){if(window.forgeViewport)window.forgeViewport.sync(state).catch(error=>toast(error.message,true));}
+window.addEventListener('forge-viewport-ready',draw3D);
+window.addEventListener('forge-view',event=>{state.activeView=event.detail;state.selected=null;renderObservations();renderReferences();});
 
 document.addEventListener('click',event=>{const target=event.target.closest('button,[data-observation]');if(!target)return;action(async()=>{
   if(target.dataset.tab)setTab(target.dataset.tab);
@@ -379,13 +396,21 @@ document.addEventListener('click',event=>{const target=event.target.closest('but
   if(target.id==='new-project'||target.id==='new-project-small')$('#project-dialog').showModal();
   if(target.id==='cancel-project')$('#project-dialog').close();
   if(target.id==='cancel-feedback')$('#feedback-dialog').close();
+    if(target.id==='cancel-print')$('#print-dialog').close();
+    if(target.id==='close-mask-editor'){$('#mask-dialog').close();draw3D();}
   if(target.id==='run-button'){
-    target.disabled=true;const run=await api(`/projects/${state.project.project_id}/runs`,{method:'POST',body:JSON.stringify({})});state.runs.unshift(run);await selectRun(run);setTab('pipeline');
+    const form=$('#print-form'),profile=state.run?.config.print_profile;
+    form.reset();
+    if(profile){for(const key of ['name','process','material','max_voxel_size_mm'])form.elements[key].value=profile[key]??'';
+      ['build_x','build_y','build_z'].forEach((key,i)=>form.elements[key].value=profile.build_volume_mm?.[i]??'');}
+    form.elements.resolution.value=state.run?.config.volumetry_resolution||64;
+    form.elements.output_mode.value='draft';
+    $('#print-dialog').showModal();
   }
   if(target.dataset.observation){state.selected=target.dataset.observation;await loadMask();}
   if(target.dataset.tool){
     if(state.tool==='lasso'&&target.dataset.tool!=='lasso'&&lassoPoints.length)resetLasso();
-    state.tool=target.dataset.tool;$('[data-tool]').forEach(b=>b.classList.toggle('active',b===target));toolCursor();
+    state.tool=target.dataset.tool;$$('[data-tool]').forEach(b=>b.classList.toggle('active',b===target));toolCursor();
   }
   if(target.id==='undo-mask'&&undo.length){maskLayer.getContext('2d').putImageData(undo.pop(),0,0);markMaskDirty();paintMask();}
   if(target.id==='toggle-edges'){showEdges=!showEdges;target.classList.toggle('active',showEdges);$('.canvas-wrap').classList.toggle('edge-mode',showEdges);paintMask();}
@@ -404,6 +429,14 @@ document.addEventListener('click',event=>{const target=event.target.closest('but
   if(target.id==='replay'){const run=await api(`/runs/${state.run.run_id}/replay`,{method:'POST'});state.runs.unshift(run);await selectRun(run);}
   if(target.id==='final-review')$('#feedback-dialog').showModal();
 });});
+$('#print-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{
+  const data=Object.fromEntries(new FormData(event.target)),axes=[data.build_x,data.build_y,data.build_z];
+  if(axes.some(Boolean)&&!axes.every(Boolean))throw new Error('Preencha os três eixos do volume útil.');
+  const profile={...(state.run?.config.print_profile||{}),name:data.name,process:data.process,material:data.material||null,max_voxel_size_mm:data.max_voxel_size_mm?Number(data.max_voxel_size_mm):null,build_volume_mm:axes.every(Boolean)?axes.map(Number):null};
+  const config={...(state.run?.config||{}),output_mode:data.output_mode,volumetry_resolution:Number(data.resolution),print_profile:profile};
+  const button=event.target.querySelector('[type="submit"]');button.disabled=true;
+  try{const run=await api(`/projects/${state.project.project_id}/runs`,{method:'POST',body:JSON.stringify(config)});$('#print-dialog').close();state.runs.unshift(run);await selectRun(run);setTab('pipeline');}finally{button.disabled=false;}
+});});
 $('#project-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{const data=Object.fromEntries(new FormData(event.target));data.known_height_mm=data.known_height_mm?Number(data.known_height_mm):null;data.style_family=data.style_family||null;const p=await api('/projects',{method:'POST',body:JSON.stringify(data)});$('#project-dialog').close();event.target.reset();await loadProjects(p.project_id);setTab('workspace');toast('Projeto criado. Adicione as quatro vistas para começar.');});});
 $('#file-upload').addEventListener('change',event=>action(async()=>{const file=event.target.files[0];if(!file)return;const data=new FormData();data.append('label',uploadLabel);data.append('file',file);await api(`/projects/${state.project.project_id}/views`,{method:'POST',body:data});const id=state.project.project_id;await loadProjects(id);event.target.value='';toast('Vista importada. Original preservado.');}));
 $('#seg-view').addEventListener('change',event=>action(async()=>{state.activeView=event.target.value;state.selected=null;await loadMask();}));
@@ -421,7 +454,6 @@ canvas.addEventListener('pointermove',event=>{if(paint&&(state.tool==='add'||sta
 canvas.addEventListener('pointerup',()=>{paint=false;lastPoint=null;});
 canvas.addEventListener('pointercancel',()=>{paint=false;lastPoint=null;});
 canvas.addEventListener('dblclick',event=>{if(state.tool==='lasso'){event.preventDefault();finishLasso();}});
-const gc=$('#geometry-canvas');gc.addEventListener('pointerdown',e=>{dragging=[e.clientX,e.clientY];gc.setPointerCapture(e.pointerId);});gc.addEventListener('pointermove',e=>{if(dragging){rotation+=(e.clientX-dragging[0])*.01;tilt=Math.max(-1,Math.min(1,tilt+(e.clientY-dragging[1])*.008));dragging=[e.clientX,e.clientY];draw3D();}});gc.addEventListener('pointerup',()=>dragging=null);gc.addEventListener('pointercancel',()=>dragging=null);gc.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.4,Math.min(3,zoom*Math.exp(-e.deltaY*.001)));draw3D();},{passive:false});window.addEventListener('resize',draw3D);
 const dimensions={segmentation_accuracy:'Precisão da segmentação',cross_view_consistency:'Consistência entre vistas',shape_fidelity:'Fidelidade da forma',style_fidelity:'Fidelidade do estilo',joint_correctness:'Articulações',connector_correctness:'Encaixes',assembly_quality:'Qualidade da montagem',printability:'Imprimibilidade',editability:'Editabilidade'};
 $('#score-fields').innerHTML=Object.entries(dimensions).map(([key,label])=>`<label>${label}<input type="number" min="0" max="1" step=".05" name="${key}" required placeholder="0 a 1"></label>`).join('');
 $('#feedback-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{const data=Object.fromEntries(new FormData(event.target)),scores=Object.fromEntries(Object.keys(dimensions).map(k=>[k,Number(data[k])]));await submitReview(node('S16').output_artifact_id,'final_evaluation',{reviewer:data.reviewer,comment:data.comment,scores,dimension:'multidimensional',reason_code:'final_evaluation'});$('#feedback-dialog').close();});});

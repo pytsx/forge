@@ -139,19 +139,29 @@ def _grid(
         minimum[index] + np.arange(resolution, dtype=np.float64) * voxel_size
         for index in range(3)
     ]
-    xx, yy, zz = np.meshgrid(*axes, indexing="ij")
-    points = np.column_stack([xx.ravel(), yy.ravel(), zz.ravel()])
+    # Populate one coordinate buffer instead of retaining three full meshgrids.
+    points = np.empty((resolution, resolution, resolution, 3), dtype=np.float64)
+    points[..., 0] = axes[0][:, None, None]
+    points[..., 1] = axes[1][None, :, None]
+    points[..., 2] = axes[2][None, None, :]
+    points = points.reshape(-1, 3)
     return points, tuple(float(value) for value in minimum), float(voxel_size)
 
 
-def _inside_mask(points: np.ndarray, camera, mask: np.ndarray) -> np.ndarray:
-    pixels = project_world_points(points, camera)
-    u = np.rint(pixels[:, 0]).astype(np.int64)
-    v = np.rint(pixels[:, 1]).astype(np.int64)
+def _inside_mask(
+    points: np.ndarray, camera, mask: np.ndarray, chunk_size: int = 65_536,
+) -> np.ndarray:
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
     height, width = mask.shape
-    valid = (u >= 0) & (v >= 0) & (u < width) & (v < height)
     inside = np.zeros(len(points), dtype=bool)
-    inside[valid] = mask[v[valid], u[valid]]
+    for start in range(0, len(points), chunk_size):
+        pixels = project_world_points(points[start:start + chunk_size], camera)
+        u = np.rint(pixels[:, 0]).astype(np.int64)
+        v = np.rint(pixels[:, 1]).astype(np.int64)
+        valid = (u >= 0) & (v >= 0) & (u < width) & (v < height)
+        block = inside[start:start + chunk_size]
+        block[valid] = mask[v[valid], u[valid]]
     return inside
 
 
@@ -211,7 +221,7 @@ class CalibratedVisualHullSDF:
     """Voxel visual hull in a calibrated canonical coordinate system."""
 
     model_id = "calibrated_visual_hull_sdf_v2"
-    model_version = "2.0.0"
+    model_version = "2.1.0"
 
     def build_with_fields(
         self,

@@ -24,7 +24,7 @@ dollforge = "dollforge.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-dollforge = ["web/*", "workers/*.py"]
+dollforge = ["web/*", "web/vendor/*", "workers/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -19,6 +19,7 @@ def run_quality_loop(
     generate: Callable[[dict], T],
     evaluate: Callable[[T], LimitEvaluation],
     tune: Callable[[dict, LimitEvaluation, int], dict],
+    on_attempt: Callable[[LimitAttempt], None] | None = None,
 ) -> tuple[T, LimitTrace]:
     parameters = deepcopy(initial_parameters)
     attempts: list[LimitAttempt] = []
@@ -34,6 +35,8 @@ def run_quality_loop(
             parameters=deepcopy(parameters),
             evaluation=evaluation,
         ))
+        if on_attempt is not None:
+            on_attempt(attempts[-1])
         if evaluation.score > best_score:
             best_score = evaluation.score
             best_value = value

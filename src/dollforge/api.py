@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import io
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,7 @@ from pydantic import Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from dollforge.bootstrap import create_service
+from dollforge.contracts import ManufacturingReport
 from dollforge.domain.models import (
     DTO,
     CreateProject,
@@ -25,6 +27,7 @@ from dollforge.domain.models import (
     PipelineConfig,
     ReviewRequest,
     RunManifest,
+    Stage,
     ViewLabel,
 )
 from dollforge.errors import Conflict, DomainError, InvalidInput, NotFound
@@ -148,6 +151,8 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.get("/api/runs/{run_id}/download")
     def download(run_id: UUID):
         run = service.store.get("run", run_id, RunManifest)
+        if run.status in (JobStatus.QUEUED, JobStatus.RUNNING):
+            raise Conflict("Aguarde a execução terminar antes de exportar.")
         if any(s.invalidated for s in run.stages):
             raise Conflict("Reprocesse as alterações antes de exportar este run.")
         identifiers = set()
@@ -180,6 +185,19 @@ def create_app(service: Service | None = None) -> FastAPI:
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", run.model_dump_json(indent=2))
+            validation = next((s for s in reversed(run.stages)
+                               if s.stage == Stage.VALIDATION and s.output_artifact_id), None)
+            if validation:
+                report = ManufacturingReport.model_validate(
+                    service.store.json(validation.output_artifact_id))
+                archive.writestr("inspection.json", report.model_dump_json(indent=2))
+                table = io.StringIO(newline="")
+                writer = csv.writer(table)
+                writer.writerow(["part_instance_id", "check", "status", "measurement", "message"])
+                for check in report.checks:
+                    writer.writerow([check.part_instance_id or "", check.code, check.status,
+                                     check.measurement, check.message])
+                archive.writestr("inspection.csv", table.getvalue().encode("utf-8-sig"))
             for identifier in sorted(identifiers, key=str):
                 meta = service.store.metadata(identifier)
                 extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",

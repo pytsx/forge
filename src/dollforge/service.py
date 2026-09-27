@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import threading
 from io import BytesIO
 from uuid import UUID, uuid4
 
@@ -58,6 +59,7 @@ class Service:
     def __init__(self, store: Store, engine: Engine):
         self.store = store
         self.engine = engine
+        self._execution_lock = threading.Lock()
 
     def create_project(self, request: CreateProject) -> DollProject:
         project = DollProject(**request.model_dump())
@@ -119,9 +121,15 @@ class Service:
             return run
 
     def execute(self, run_id: UUID) -> RunManifest:
-        with self.store.lock:
-            run = self.store.get("run", run_id, RunManifest)
-            previous = self.store.get("run", run.replay_of, RunManifest) if run.replay_of else None
+        # Serialize pipeline workers without blocking reads and progress polling.
+        with self._execution_lock:
+            with self.store.lock:
+                run = self.store.get("run", run_id, RunManifest)
+                if run.status != JobStatus.QUEUED:
+                    raise Conflict("Somente execuções na fila podem ser iniciadas.")
+                previous = self.store.get("run", run.replay_of, RunManifest) if run.replay_of else None
+                run.status = JobStatus.RUNNING
+                self.store.save("run", run_id, run)
             return self.engine.execute(run, previous)
 
     @staticmethod

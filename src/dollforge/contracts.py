@@ -10,6 +10,7 @@ from dollforge.domain.models import (
     ImageView,
     PartInstance,
     PartObservation,
+    PrintProfile,
     Provenance,
     Score,
     ViewLabel,
@@ -170,10 +171,26 @@ class Check(DTO):
     message: str
 
 
+class PartInspection(DTO):
+    part_instance_id: UUID
+    name: str
+    vertex_count: int
+    face_count: int
+    shell_count: int | None = None
+    extents_mm: tuple[float, float, float] | None = None
+    surface_area_mm2: float | None = None
+    volume_mm3: float | None = None
+
+
 class ManufacturingReport(DTO):
     status: str
     manufacturable: bool
     checks: list[Check]
+    geometry_status: Literal["passed", "blocked", "not_evaluated"] = "not_evaluated"
+    failed_checks: int = 0
+    pending_checks: int = 0
+    print_profile: PrintProfile | None = None
+    parts: list[PartInspection] = Field(default_factory=list)
 
 
 class BlenderResult(DTO):

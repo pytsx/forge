@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Callable
 from uuid import UUID, uuid5
 
-import numpy as np
 import structlog
 import trimesh
 from pydantic import BaseModel
@@ -41,6 +40,7 @@ from dollforge.domain.models import (
     Lineage,
     PartInstance,
     PartObservation,
+    PrintProfile,
     Provenance,
     RunManifest,
     ScaleEstimate,
@@ -49,6 +49,7 @@ from dollforge.domain.models import (
     utcnow,
 )
 from dollforge.errors import DomainError, InvalidInput, QualityLimitExceeded
+from dollforge.manufacturing import inspect_meshes
 from dollforge.perception.models import PerceptionGraph
 from dollforge.quality.loop import run_quality_loop
 from dollforge.quality.models import LimitTrace, TrainingSignal
@@ -183,10 +184,24 @@ class Engine:
         if node is None:
             raise QualityLimitExceeded(f"Prova de qualidade ausente para {node_id}.")
         if node.quality_status == "retrain_candidate" and run.config.quality_fail_closed:
+            if run.config.output_mode == "draft" and node.output_artifact_id:
+                # Failed evidence remains failed. Only a clearly labelled draft may continue.
+                return
             raise QualityLimitExceeded(
                 f"{node_id} não atingiu o limite após {node.quality_attempts} tentativas. "
                 "O melhor resultado foi preservado para revisão e o caso foi marcado para retreino."
             )
+
+    def progress(self, run: RunManifest, stage: Stage, scope: str, attempt) -> None:
+        node = next(s for s in reversed(run.stages) if s.node_id == f"{stage}:{scope}")
+        node.quality_attempts = attempt.attempt
+        node.quality_score = attempt.evaluation.score
+        failed = [m.code for m in attempt.evaluation.metrics if not m.passed]
+        node.progress_message = (
+            f"Tentativa {attempt.attempt}/{run.config.quality_max_attempts}: "
+            + ("critérios atingidos" if not failed else "revisando " + ", ".join(failed))
+        )
+        self.store.save("run", run.run_id, run)
 
     def segmentation_adapter(self, adapter_id: str) -> SegmentationAdapter:
         adapter = self.segmenters.get(adapter_id)
@@ -348,6 +363,8 @@ class Engine:
                                 coverage_threshold=run.config.segmentation_coverage_limit,
                             ),
                             tune=tune_segmentation,
+                            on_attempt=lambda attempt: self.progress(
+                                run, Stage.SEGMENTATION, str(view.view_id), attempt),
                         )
                         self.record_quality_trace(
                             run,
@@ -450,7 +467,8 @@ class Engine:
                         confidence_threshold=run.config.matching_confidence_limit,
                         coverage_threshold=run.config.matching_coverage_limit,
                     ),
-                    tune=tune_matching,
+                            tune=tune_matching,
+                            on_attempt=lambda attempt: self.progress(run, Stage.MATCHING, "all", attempt),
                 )
                 self.record_quality_trace(
                     run,
@@ -593,7 +611,8 @@ class Engine:
                             outside_area_threshold=run.config.volumetry_outside_area_limit,
                             overshoot_px_threshold=run.config.volumetry_overshoot_px_limit,
                         ),
-                        tune=tune_volumetry,
+                            tune=tune_volumetry,
+                            on_attempt=lambda attempt: self.progress(run, Stage.VOLUMETRY, "all", attempt),
                     )
                     self.record_quality_trace(
                         run,
@@ -643,6 +662,8 @@ class Engine:
                 candidates = reconstructor.reconstruct(
                     graph, observations, run.views, volumetry_value
                 )
+                if not candidates:
+                    raise InvalidInput("Nenhuma malha reconstruída. Revise as máscaras e os volumes.")
                 records = []
                 for candidate in candidates:
                     mesh = trimesh.Trimesh(candidate.vertices, candidate.faces, process=False)
@@ -683,22 +704,43 @@ class Engine:
             reconstructed = ReconstructionResult.model_validate(self.store.json(reconstruction.artifact_id))
             candidates = [MeshCandidate.model_validate(self.store.json(m.preview_artifact_id))
                           for m in reconstructed.meshes]
-            self.node(run, Stage.VALIDATION, "all", [reconstruction.artifact_id],
+            validation = self.node(run, Stage.VALIDATION, "all",
+                      [reconstruction.artifact_id, volumetry_art.artifact_id,
+                       graph_art.artifact_id, calibration.artifact_id],
                       lambda: self.validate(
                           candidates,
                           graph.scale.unit,
                           volumetry_value,
                           calibrated_cameras.cameras,
+                          run.config.print_profile,
+                          {part.part_instance_id for part in graph.parts},
+                          iou_limit=run.config.volumetry_iou_limit,
+                          outside_area_limit=run.config.volumetry_outside_area_limit,
+                          overshoot_px_limit=run.config.volumetry_overshoot_px_limit,
+                          failed_stage_ids=[s.node_id for s in run.stages
+                                            if s.quality_status == "retrain_candidate"],
                       ), replay=replay)
-            if run.config.build_blender:
+            report = ManufacturingReport.model_validate(self.store.json(validation.artifact_id))
+            draft = run.config.output_mode == "draft"
+            run.result_kind = "draft" if draft or report.geometry_status == "blocked" else "inspected"
+            if draft:
+                run.error = ("Prévia 3D gerada para revisão. "
+                             f"{report.failed_checks} falha(s) de qualidade; sem liberação para fabricação.")
+            elif report.geometry_status == "blocked":
+                run.error = (f"Inspeção bloqueada por {report.failed_checks} falha(s). "
+                             "Consulte a validação por peça antes de gerar o projeto Blender.")
+            if run.config.build_blender and (draft or report.geometry_status != "blocked"):
                 def build():
                     data, version = self.blender.build(candidates, graph.scale.unit)
-                    blend = self.put(run, Stage.BLENDER, "assembly.blend", data,
+                    blend = self.put(run, Stage.BLENDER, "assembly_draft.blend" if draft else "assembly.blend", data,
                         [reconstruction.artifact_id], "application/x-blender", version=version)
                     return BlenderResult(blend_artifact_id=blend.artifact_id,
                         object_count=len(candidates), blender_version=version, unit=graph.scale.unit)
-                self.node(run, Stage.BLENDER, "all", [reconstruction.artifact_id], build,
-                          self.blender.model_version, replay)
+                if self.blender.model_version == "unavailable":
+                    run.error = (run.error or "Modelo 3D gerado.") + " Blender indisponível; malhas STL preservadas."
+                else:
+                    self.node(run, Stage.BLENDER, "all", [reconstruction.artifact_id], build,
+                              self.blender.model_version, replay)
             run.status = JobStatus.REVIEW
         except QualityLimitExceeded as exc:
             run.status = JobStatus.REVIEW
@@ -766,17 +808,19 @@ class Engine:
         unit: str,
         volumetry: VolumetryResult | None = None,
         cameras: list[CameraEstimate] | None = None,
+        profile: PrintProfile | None = None,
+        expected_part_ids: set[UUID] | None = None,
+        *,
+        iou_limit: float = .95,
+        outside_area_limit: float = .02,
+        overshoot_px_limit: float = 2.0,
+        failed_stage_ids: list[str] | None = None,
     ) -> ManufacturingReport:
-        checks = []
-        for candidate in candidates:
-            mesh = trimesh.Trimesh(candidate.vertices, candidate.faces, process=False)
-            for name, passed in [("manifold", mesh.is_watertight),
-                                  ("normals", mesh.is_winding_consistent and mesh.volume > 0),
-                                  ("nonzero_faces", bool(np.all(mesh.area_faces > 1e-12)))]:
-                checks.append(Check(code=name, status="pass" if passed else "fail",
-                                    part_instance_id=candidate.part_instance_id, message=name))
-        checks.append(Check(code="physical_scale", status="pass" if unit == "mm" else "warn",
-                            message="Escala física fornecida" if unit == "mm" else "Escala relativa"))
+        profile = profile or PrintProfile()
+        checks, inspections = inspect_meshes(candidates, unit, profile, expected_part_ids)
+        for node_id in failed_stage_ids or []:
+            checks.append(Check(code="upstream_quality", status="fail",
+                                message=f"{node_id}: critérios não atingidos; resultado apenas para revisão."))
         if cameras is not None:
             calibrated = [camera for camera in cameras if camera.calibrated]
             checks.append(Check(
@@ -790,7 +834,7 @@ class Engine:
                 for metric in volume.reprojection_metrics:
                     checks.append(Check(
                         code=f"reprojection_{metric.view_label}",
-                        status="pass" if metric.silhouette_iou >= .90 else "warn",
+                        status="pass" if metric.silhouette_iou >= iou_limit else "warn",
                         part_instance_id=volume.part_instance_id,
                         measurement=metric.silhouette_iou,
                         message=(
@@ -800,24 +844,48 @@ class Engine:
                     ))
                     checks.append(Check(
                         code=f"outside_boundary_{metric.view_label}",
-                        status="pass" if metric.hard_boundary_compliant else "fail",
+                        status="pass" if (metric.outside_area_ratio <= outside_area_limit
+                                           and metric.max_overshoot_px <= overshoot_px_limit)
+                        else "fail",
                         part_instance_id=volume.part_instance_id,
                         measurement=metric.outside_area_ratio,
                         message=(
                             f"Outside area {metric.view_label}: "
                             f"{metric.outside_area_ratio:.2%}; "
-                            f"overshoot máx. {metric.max_overshoot_px:.2f}px"
+                            f"overshoot máx. {metric.max_overshoot_px:.2f}px. "
+                            f"Limites: {outside_area_limit:.2%} e {overshoot_px_limit:.2f}px."
                         ),
                     ))
                 if volume.reprojection_metrics:
                     checks.append(Check(
                         code="multiview_consistency",
-                        status="pass" if volume.mean_reprojection_iou >= .90 else "warn",
+                        status="pass" if volume.mean_reprojection_iou >= iou_limit else "warn",
                         part_instance_id=volume.part_instance_id,
                         measurement=volume.mean_reprojection_iou,
                         message=f"Mean reprojection IoU: {volume.mean_reprojection_iou:.1%}",
                     ))
-        for name in ("wall_thickness", "clearance", "collisions", "joint_range", "separability"):
+        volumes = {v.part_instance_id: v for v in volumetry.volumes} if volumetry else {}
+        for candidate in candidates:
+            volume = volumes.get(candidate.part_instance_id)
+            voxel = volume.field.voxel_size_mm if volume and volume.field else None
+            limit = profile.max_voxel_size_mm
+            status = "not_evaluated"
+            message = "Configure o tamanho máximo de voxel; isso não é tolerância dimensional."
+            if limit is not None:
+                status = "pass" if unit == "mm" and voxel is not None and voxel <= limit else "fail"
+                message = (f"Voxel: {voxel:.4f} mm; limite: {limit:.4f} mm."
+                           if voxel is not None else "Sem evidência de resolução física por peça.")
+            checks.append(Check(code="voxel_resolution", status=status,
+                                part_instance_id=candidate.part_instance_id,
+                                measurement=voxel, message=message))
+        for name in ("wall_thickness", "clearance", "collisions", "joint_range", "separability",
+                     "self_intersections", "dimensional_accuracy", "print_process"):
             checks.append(Check(code=name, status="not_evaluated",
                                 message="Requer validação mecânica especializada."))
-        return ManufacturingReport(status="needs_review", manufacturable=False, checks=checks)
+        failed = sum(check.status == "fail" for check in checks)
+        pending = sum(check.status in ("warn", "not_evaluated") for check in checks)
+        return ManufacturingReport(status="blocked" if failed else "needs_review",
+                                   manufacturable=False, checks=checks,
+                                   geometry_status="blocked" if failed else "passed",
+                                   failed_checks=failed, pending_checks=pending,
+                                   print_profile=profile, parts=inspections)
