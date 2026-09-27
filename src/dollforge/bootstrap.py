@@ -7,6 +7,7 @@ import structlog
 from dollforge.adapters.baseline import EllipsoidReconstructor, SilhouetteSegmenter
 from dollforge.adapters.blender import HeadlessBlender
 from dollforge.adapters.contour import ContourDollSegmenter
+from dollforge.adapters.edge_parts import EdgePartSegmenter
 from dollforge.adapters.grounded_sam2 import GroundedSam2Segmenter
 from dollforge.adapters.matching import MultiSignalMatcher
 from dollforge.adapters.templates import DollTemplateReconstructor
@@ -31,7 +32,8 @@ def create_service(root: Path | None = None) -> Service:
     volume_reconstructor = SilhouetteVolumeReconstructor()
     calibrated_volume = CalibratedVisualHullSDF()
     silhouette_volume = SilhouetteVisualHull()
-    segmenters = {contour.model_id: contour}
+    edge_parts = EdgePartSegmenter()
+    segmenters = {contour.model_id: contour, edge_parts.model_id: edge_parts}
     if os.environ.get("DOLLFORGE_GDINO_CONFIG") and os.environ.get("DOLLFORGE_GDINO_CHECKPOINT"):
         segmenters["grounded_sam2_v1"] = GroundedSam2Segmenter.from_environment()
     return Service(store, Engine(
