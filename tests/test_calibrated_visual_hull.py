@@ -179,12 +179,17 @@ def test_calibrated_visual_hull_recovers_synthetic_cuboid_dimensions():
     assert np.all(np.abs(actual - expected) <= voxel * 1.5)
     assert volume.mean_reprojection_iou >= .95
     assert all(metric.silhouette_iou >= .93 for metric in volume.reprojection_metrics)
-    assert volume.field.grid_shape == (64, 64, 64)
+    # The calibrated hull uses an anisotropic grid so thin limbs retain
+    # cross-section detail instead of spending samples in empty space.
+    assert volume.field.grid_shape[2] == 64
+    assert min(volume.field.grid_shape) >= 24
+    assert len(set(volume.field.grid_shape)) > 1
     assert volume.concavity_support is False
     with np.load(BytesIO(fields[0].payload)) as data:
         assert {"occupancy", "sdf", "origin_xyz", "voxel_size", "shape_xyz"} <= set(data.files)
-        assert tuple(data["occupancy"].shape) == (64, 64, 64)
-        assert data["sdf"][32, 32, 32] < 0
+        assert tuple(data["occupancy"].shape) == volume.field.grid_shape
+        center_index = tuple(size // 2 for size in data["sdf"].shape)
+        assert data["sdf"][center_index] < 0
 
 
 def test_one_confirmed_view_can_carve_geometry_seen_by_other_views():

@@ -131,21 +131,41 @@ def _grid(
     center: np.ndarray,
     extents: np.ndarray,
     resolution: int,
-) -> tuple[np.ndarray, tuple[float, float, float], float]:
-    cube_extent = float(max(extents) * 1.12)
-    voxel_size = cube_extent / resolution
-    minimum = center - cube_extent / 2 + voxel_size / 2
+    anisotropic: bool = False,
+) -> tuple[np.ndarray, tuple[float, float, float], float | tuple[float, float, float]]:
+    """Create an anisotropic grid that keeps detail in thin parts.
+
+    The old cubic grid gave an arm the same number of samples as its longest
+    axis.  Most samples were therefore wasted in empty depth/height and the
+    SDF could only produce a blocky cross-section.  We keep a common nominal
+    voxel scale, but allocate at least ``resolution // 2`` samples on every
+    axis.  Marching cubes and the SDF both receive the real per-axis spacing.
+    """
+    padded = np.maximum(np.asarray(extents, dtype=np.float64) * 1.12, 1e-9)
+    longest = float(padded.max())
+    nominal = longest / resolution
+    if anisotropic:
+        shape = np.maximum(24, np.ceil(padded / nominal).astype(int))
+        shape = np.minimum(shape, max(resolution * 3, 96))
+        spacing = padded / shape
+    else:
+        shape = np.asarray([resolution, resolution, resolution], dtype=int)
+        spacing = np.asarray([nominal, nominal, nominal], dtype=np.float64)
+    minimum = center - padded / 2 + spacing / 2
     axes = [
-        minimum[index] + np.arange(resolution, dtype=np.float64) * voxel_size
+        minimum[index] + np.arange(shape[index], dtype=np.float64) * spacing[index]
         for index in range(3)
     ]
-    # Populate one coordinate buffer instead of retaining three full meshgrids.
-    points = np.empty((resolution, resolution, resolution, 3), dtype=np.float64)
+    points = np.empty((*shape, 3), dtype=np.float64)
     points[..., 0] = axes[0][:, None, None]
     points[..., 1] = axes[1][None, :, None]
     points[..., 2] = axes[2][None, None, :]
     points = points.reshape(-1, 3)
-    return points, tuple(float(value) for value in minimum), float(voxel_size)
+    return (
+        points,
+        tuple(float(value) for value in minimum),
+        (tuple(float(value) for value in spacing) if anisotropic else float(nominal)),
+    )
 
 
 def _inside_mask(
@@ -168,24 +188,25 @@ def _inside_mask(
 def _volume_slices(
     occupancy: np.ndarray,
     origin: tuple[float, float, float],
-    voxel_size: float,
+    voxel_size: float | tuple[float, float, float],
     center: np.ndarray,
     extents: np.ndarray,
     confidence: float,
 ) -> list[VolumeSlice]:
     resolution = occupancy.shape[2]
+    spacing = np.asarray(np.broadcast_to(voxel_size, 3), dtype=np.float64)
     slices: list[VolumeSlice] = []
     for z_index in range(resolution):
         x_indices, y_indices = np.where(occupancy[:, :, z_index])
         if len(x_indices):
-            x_min = origin[0] + x_indices.min() * voxel_size
-            x_max = origin[0] + x_indices.max() * voxel_size
-            y_min = origin[1] + y_indices.min() * voxel_size
-            y_max = origin[1] + y_indices.max() * voxel_size
+            x_min = origin[0] + x_indices.min() * spacing[0]
+            x_max = origin[0] + x_indices.max() * spacing[0]
+            y_min = origin[1] + y_indices.min() * spacing[1]
+            y_max = origin[1] + y_indices.max() * spacing[1]
             center_x = ((x_min + x_max) / 2 - center[0]) / max(extents[0], 1e-12)
             center_y = ((y_min + y_max) / 2 - center[1]) / max(extents[1], 1e-12)
-            half_width = (x_max - x_min + voxel_size) / 2 / max(extents[0], 1e-12)
-            half_depth = (y_max - y_min + voxel_size) / 2 / max(extents[1], 1e-12)
+            half_width = (x_max - x_min + spacing[0]) / 2 / max(extents[0], 1e-12)
+            half_depth = (y_max - y_min + spacing[1]) / 2 / max(extents[1], 1e-12)
         else:
             center_x = center_y = half_width = half_depth = 0.0
         slices.append(VolumeSlice(
@@ -203,7 +224,7 @@ def _field_bytes(
     occupancy: np.ndarray,
     sdf: np.ndarray,
     origin: tuple[float, float, float],
-    voxel_size: float,
+    voxel_size: tuple[float, float, float],
 ) -> bytes:
     buffer = BytesIO()
     np.savez_compressed(
@@ -211,7 +232,7 @@ def _field_bytes(
         occupancy=occupancy.astype(np.uint8),
         sdf=sdf.astype(np.float32),
         origin_xyz=np.asarray(origin, dtype=np.float64),
-        voxel_size=np.asarray([voxel_size], dtype=np.float64),
+        voxel_size=np.asarray(voxel_size, dtype=np.float64),
         shape_xyz=np.asarray(occupancy.shape, dtype=np.int32),
     )
     return buffer.getvalue()
@@ -269,7 +290,9 @@ class CalibratedVisualHullSDF:
                 perception,
                 request.graph.scale.canonical_height,
             )
-            points, origin, voxel_size = _grid(center, nominal_extents, resolution)
+            points, origin, voxel_size = _grid(
+                center, nominal_extents, resolution, anisotropic=True
+            )
 
             weighted_inside = np.zeros(len(points), dtype=np.float64)
             total_weight = 0.0
@@ -310,9 +333,14 @@ class CalibratedVisualHullSDF:
                 )
                 continue
 
-            occupancy = occupancy_flat.reshape(
-                (resolution, resolution, resolution)
-            )
+            padded_extents = np.maximum(np.asarray(nominal_extents) * 1.12, 1e-9)
+            grid_shape = tuple(
+                int(value) for value in np.minimum(
+                    np.maximum(24, np.ceil(padded_extents / (padded_extents.max() / resolution))),
+                    max(resolution * 3, 96),
+                )
+            ) if isinstance(voxel_size, tuple) else (resolution,) * 3
+            occupancy = occupancy_flat.reshape(grid_shape)
             sdf = signed_distance_field(occupancy, voxel_size)
             try:
                 vertices, faces = extract_zero_surface(sdf, origin, voxel_size)
@@ -333,9 +361,10 @@ class CalibratedVisualHullSDF:
             faces = mesh.faces.tolist()
 
             occupied_points = points[occupancy_flat]
-            minimum = occupied_points.min(axis=0) - voxel_size / 2
-            maximum = occupied_points.max(axis=0) + voxel_size / 2
-            extents = np.maximum(maximum - minimum, voxel_size)
+            spacing = np.asarray(np.broadcast_to(voxel_size, 3), dtype=np.float64)
+            minimum = occupied_points.min(axis=0) - spacing / 2
+            maximum = occupied_points.max(axis=0) + spacing / 2
+            extents = np.maximum(maximum - minimum, spacing)
             volume_center = (minimum + maximum) / 2
 
             reprojection_metrics = []
@@ -345,7 +374,7 @@ class CalibratedVisualHullSDF:
                     occupied_points,
                     camera,
                     reference,
-                    voxel_size,
+                    float(np.mean(spacing)),
                     hard_constraint=hard_by_view.get(camera.view_id, False),
                 ))
             mean_iou = (
@@ -367,8 +396,12 @@ class CalibratedVisualHullSDF:
 
             descriptor = VolumeFieldDescriptor(
                 grid_shape=tuple(int(value) for value in occupancy.shape),
-                voxel_size_world=voxel_size,
-                voxel_size_mm=voxel_size if request.graph.scale.unit == "mm" else None,
+                # The public descriptor remains scalar for compatibility with
+                # manufacturing limits; the exact anisotropic spacing is
+                # persisted in the field artifact.
+                voxel_size_world=float(np.mean(spacing)),
+                voxel_size_mm=(float(np.mean(spacing))
+                               if request.graph.scale.unit == "mm" else None),
                 unit=request.graph.scale.unit,
                 origin_xyz=origin,
             )
@@ -387,7 +420,7 @@ class CalibratedVisualHullSDF:
                 slices=_volume_slices(
                     occupancy,
                     origin,
-                    voxel_size,
+                    tuple(float(value) for value in spacing),
                     volume_center,
                     extents,
                     confidence,

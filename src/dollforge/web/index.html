@@ -75,16 +75,9 @@
   <fieldset><legend>Segmentação das peças</legend>
     <p id="segmentation-current" class="muted"></p>
     <label>Método<select name="segmentation_adapter" id="segmentation-adapter">
-      <option value="silhouette_rules_v1">Silhueta — v1</option>
+      <option value="boundary_cells_v1">Células delimitadas por bordas — v1 (recomendado)</option>
       <option value="contour_rules_v3">Bordas e pescoço — v3</option>
       <option value="contour_rules_v2">Contornos proporcionais — v2</option>
-
-   
-
-      <option value="boundary_cells_v1">
-        Células delimitadas por bordas — experimental
-      </option>
-
       <option value="silhouette_rules_v1">Silhueta — v1</option>
       <option value="grounded_sam2_v1">Grounding DINO + SAM 2 (requer instalação no servidor)</option>
     </select></label>
